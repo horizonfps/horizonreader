@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Accounts are created manually (CLI / direct DB insert). No self sign-up.
+model User {
+  id           Int              @id @default(autoincrement())
+  username     String           @unique
+  passwordHash String
+  isAdmin      Boolean          @default(false)
+  displayName  String?
+  avatarUrl    String?
+  bannerUrl    String?
+  bio          String?
+  settings     String? // JSON blob for profile/reader preferences
+  createdAt    DateTime         @default(now())
+  follows      Follow[]
+  progress     Progress[]
+  favorites    Favorite[]
+  history      ReadingHistory[]
+}
+
+// Legacy per-user library. Superseded by Favorite; kept so old data survives.
+model Follow {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  mangaId   Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mangaId])
+  @@index([userId])
+}
+
+// Canonical work identity from the metadata backbone (MangaDex/MangaUpdates/Comick).
+// One Work = one story regardless of how many scan sources carry it (dedup target).
+model Work {
+  id            Int              @id @default(autoincrement())
+  slug          String           @unique
+  origin        String // backbone origin: mangadex | comick | manual
+  externalId    String // backbone id (e.g. mangadex uuid)
+  title         String
+  normalizedKey String // primary normalized title used for dedup
+  altTitles     String? // JSON array of every known title, all languages
+  matchKeys     String? // JSON array of normalized keys for dedup lookup
+  description   String?
+  coverUrl      String?
+  author        String?
+  artist        String?
+  type          String? // manga | manhwa | manhua | other
+  status        String? // ongoing | completed | hiatus | cancelled
+  contentRating String?
+  year          Int?
+  rating        Float?
+  follows       Int? // popularity signal (backbone follow count)
+  genres        String? // JSON array
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  links         SourceLink[]
+  favorites     Favorite[]
+  progress      Progress[]
+  history       ReadingHistory[]
+
+  @@unique([origin, externalId])
+  @@index([normalizedKey])
+  @@index([type])
+  @@index([status])
+}
+
+// Binds a canonical Work to one Suwayomi source-manga (a specific scan).
+// healthScore ranks which scan is shown first when opening a Work.
+model SourceLink {
+  id            Int       @id @default(autoincrement())
+  workId        Int
+  sourceId      String // Suwayomi source id
+  sourceName    String?
+  sourceMangaId Int // Suwayomi manga id
+  lang          String?
+  url           String?
+  isPrimary     Boolean   @default(false)
+  chapterCount  Int       @default(0)
+  latestAt      DateTime?
+  healthScore   Float     @default(0)
+  lastSyncedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  work          Work      @relation(fields: [workId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, sourceMangaId])
+  @@index([workId])
+}
+
+// Per-user favorite/library entry with reading status.
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  workId    Int
+  status    String   @default("READING") // READING | ON_HOLD | DROPPED | COMPLETED | PLAN_TO_READ
+  rating    Int?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  work      Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workId])
+  @@index([userId, status])
+}
+
+// Per-user current reading position. chapterId/mangaId reference Suwayomi ids.
+model Progress {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  workId        Int?
+  sourceLinkId  Int?
+  mangaId       Int
+  chapterId     Int
+  chapterNumber Float    @default(0)
+  lastPageRead  Int      @default(0)
+  read          Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  work          Work?    @relation(fields: [workId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, chapterId])
+  @@index([userId, mangaId])
+  @@index([userId, workId])
+}
+
+// Append-only reading events for the profile timeline + xlsx export.
+model ReadingHistory {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  workId        Int
+  chapterId     Int
+  chapterNumber Float    @default(0)
+  lastPageRead  Int      @default(0)
+  readAt        DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  work          Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}

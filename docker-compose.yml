@@ -1,0 +1,95 @@
+services:
+  # ---- Your private site (the only service exposed) ----
+  web:
+    build: .
+    container_name: manga-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TZ: America/Sao_Paulo
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
+      DATABASE_URL: file:/data/app.db
+      SUWAYOMI_URL: http://suwayomi:4567
+      FLARESOLVERR_URL: http://flaresolverr:8191
+      # Uploaded avatars/banners live on the mounted data volume.
+      UPLOAD_DIR: /data/uploads
+      # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    volumes:
+      - ./data:/data
+    ports:
+      - "3000:3000"
+    depends_on:
+      - suwayomi
+    networks:
+      - manga
+
+  # ---- Cloudflare Tunnel: publishes only the web app (reader subdomain) ----
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:?set CF_TUNNEL_TOKEN in .env}
+    depends_on:
+      - web
+    networks:
+      - manga
+
+  # ---- Suwayomi engine: scrapes sources, downloads chapters (internal only) ----
+  suwayomi:
+    image: ghcr.io/suwayomi/suwayomi-server:stable
+    container_name: suwayomi-server
+    restart: unless-stopped
+    # Bound to localhost only: lets you reach Suwayomi's own admin WebUI at
+    # http://localhost:4567 (install extensions / add sources) and run the
+    # host dev server. It is NOT reachable from the LAN/internet. Remove this
+    # block entirely for strict isolation (manage sources via the app instead).
+    ports:
+      - "127.0.0.1:4567:4567"
+    environment:
+      TZ: America/Sao_Paulo
+      BIND_IP: "0.0.0.0"
+      BIND_PORT: "4567"
+      AUTH_MODE: "none"
+      DOWNLOAD_AS_CBZ: "true"
+      # Downloads are triggered per-chapter from the app. Flip to "true" to also
+      # auto-download new chapters of followed titles.
+      AUTO_DOWNLOAD_CHAPTERS: "false"
+      AUTO_DOWNLOAD_NEW_CHAPTERS_LIMIT: "0"
+      # Keiyoushi source repo. v2.3.x uses EXTENSION_STORES; older builds use
+      # EXTENSION_REPOS. Setting both is harmless.
+      EXTENSION_STORES: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
+      EXTENSION_REPOS: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
+      FLARESOLVERR_ENABLED: "true"
+      FLARESOLVERR_URL: "http://flaresolverr:8191"
+      FLARESOLVERR_TIMEOUT: "60"
+      FLARESOLVERR_SESSION_NAME: "suwayomi"
+      FLARESOLVERR_SESSION_TTL: "15"
+    volumes:
+      # Order matters: downloads must be mounted before the data dir.
+      - ./suwayomi/downloads:/home/suwayomi/.local/share/Tachidesk/downloads
+      - ./suwayomi/data:/home/suwayomi/.local/share/Tachidesk
+    depends_on:
+      - flaresolverr
+    networks:
+      - manga
+
+  # ---- Cloudflare challenge solver for protected sources (internal only) ----
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: America/Sao_Paulo
+      LOG_LEVEL: info
+    expose:
+      - "8191"
+    networks:
+      - manga
+
+networks:
+  manga:
+    driver: bridge
