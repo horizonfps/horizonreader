@@ -5,6 +5,10 @@ node_modules
 .env.local
 prisma/dev.db
 data
+suwayomi
+docs
+*.tsbuildinfo
 README.md
+DEPLOY.md
 Dockerfile
 docker-compose.yml

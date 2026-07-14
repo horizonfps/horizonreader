@@ -18,7 +18,8 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "3000:3000"
+      # Host port is only for local checks; the tunnel reaches web:3000 internally.
+      - "${WEB_PORT:-3000}:3000"
     depends_on:
       - suwayomi
     networks:
@@ -30,8 +31,10 @@ services:
     container_name: cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run
+    # Opt-in: `docker compose --profile tunnel up -d` starts the tunnel.
+    profiles: ["tunnel"]
     environment:
-      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:?set CF_TUNNEL_TOKEN in .env}
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN:-}
     depends_on:
       - web
     networks:

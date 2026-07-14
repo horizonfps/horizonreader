@@ -7,6 +7,8 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+# Schema must exist before install: postinstall runs `prisma generate`.
+COPY prisma ./prisma
 RUN npm install --include=dev --no-audit --no-fund
 
 COPY . .
