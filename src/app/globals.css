@@ -36,3 +36,55 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Cover art sits inside a link. Make it inert so a tap always hits the anchor
+   (never the browser's "open/save image") and can't be dragged or selected. */
+.cover-img {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Admin username: bold animated blue gradient shimmer. */
+.admin-name {
+  background: linear-gradient(90deg, #1e7fb0, #28a8d8, #7fd6f2, #28a8d8, #1e7fb0);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: admin-shimmer 3s linear infinite;
+}
+@keyframes admin-shimmer {
+  to {
+    background-position: 200% center;
+  }
+}
+
+/* Admin badge (app icon) with hover tooltip. */
+.admin-badge img {
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.6), 0 0 8px rgb(var(--accent) / 0.45);
+}
+.admin-badge .admin-tooltip {
+  position: absolute;
+  bottom: 130%;
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgb(var(--elevated));
+  border: 1px solid rgb(var(--border));
+  color: rgb(var(--text));
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 40;
+}
+.admin-badge:hover .admin-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}

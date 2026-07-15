@@ -2,9 +2,10 @@
 
 import { comickSections, getComickGenres, getComickTrending } from "@/lib/backbone/comick";
 import { listMangaDex } from "@/lib/backbone/mangadex";
+import { isBlocked } from "@/lib/backbone/filter";
 import type { BackboneWork, SectionItem } from "@/lib/backbone/types";
 
-const CAP = 24;
+const CAP = 30;
 const TTL = 60 * 60 * 1000;
 
 export type HomeSections = {
@@ -44,12 +45,13 @@ async function safe<T>(p: Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-// De-dup by (origin + slug/externalId) and cap the row.
+// Drop blocked (NSFW / BL-GL) items, de-dup by (origin + slug/externalId), cap.
 function dedupCap(items: SectionItem[]): SectionItem[] {
   const seen = new Set<string>();
   const out: SectionItem[] = [];
   for (const it of items) {
     if (!it) continue;
+    if (isBlocked({ genres: it.genres, contentRating: it.contentRating })) continue;
     const key = `${it.origin}:${it.slug || it.externalId}`;
     if (!it.slug && !it.externalId) continue;
     if (seen.has(key)) continue;
@@ -71,6 +73,8 @@ function workToItem(w: BackboneWork): SectionItem {
     status: w.status ?? null,
     rating: w.rating ?? null,
     chapterCount: null,
+    genres: w.genres ?? [],
+    contentRating: w.contentRating ?? null,
   };
 }
 

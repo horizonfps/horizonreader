@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { Card } from "@/lib/cards";
-import CardGrid from "@/components/CardGrid";
+import { workHref } from "@/lib/cards";
+import CardRow from "@/components/CardRow";
 
-const SECTION_LIMIT = 8;
+const ROW_LIMIT = 30;
 
 export default function SectionRow({
   title,
@@ -15,6 +16,13 @@ export default function SectionRow({
   href?: string;
 }) {
   if (!items.length) return null;
+  const rowItems = items.slice(0, ROW_LIMIT).map((it) => ({
+    href: workHref(it),
+    title: it.title,
+    coverUrl: it.coverUrl,
+    rating: it.rating,
+    type: it.type,
+  }));
   return (
     <section className="mt-6">
       <div className="mb-2 flex items-center justify-between">
@@ -29,7 +37,7 @@ export default function SectionRow({
           </Link>
         ) : null}
       </div>
-      <CardGrid items={items} limit={SECTION_LIMIT} />
+      <CardRow items={rowItems} />
     </section>
   );
 }

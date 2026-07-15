@@ -2,6 +2,7 @@
 
 import type { BackboneWork, WorkStatus } from "@/lib/backbone/types";
 import { originLangToType } from "@/lib/backbone/types";
+import { BLOCKED_MDX_TAGS } from "@/lib/backbone/filter";
 
 const BASE = "https://api.mangadex.org";
 const COVERS = "https://uploads.mangadex.org/covers";
@@ -18,7 +19,8 @@ const HEADERS: Record<string, string> = {
   "Sec-Fetch-Site": "same-site",
 };
 
-const DEFAULT_RATINGS = ["safe", "suggestive", "erotica"];
+// erotica/pornographic are intentionally excluded (no NSFW discovery).
+const DEFAULT_RATINGS = ["safe", "suggestive"];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -140,6 +142,7 @@ export async function searchMangaDex(title: string, limit = 8): Promise<Backbone
   qs.set("limit", String(limit));
   qs.append("includes[]", "cover_art");
   appendAll(qs, "contentRating[]", DEFAULT_RATINGS);
+  appendAll(qs, "excludedTags[]", BLOCKED_MDX_TAGS);
   qs.set("order[relevance]", "desc");
   const d = await getJson<{ data?: MdxManga[] }>(`/manga?${qs.toString()}`);
   if (!d || !Array.isArray(d.data)) return [];
@@ -220,6 +223,7 @@ export async function listMangaDex(opts: {
   updatedAtSince?: string;
   originalLanguage?: string[];
   includedTags?: string[];
+  excludedTags?: string[];
   hasAvailableChapters?: boolean;
   limit?: number;
   offset?: number;
@@ -231,6 +235,7 @@ export async function listMangaDex(opts: {
   appendAll(qs, "status[]", opts.status);
   appendAll(qs, "originalLanguage[]", opts.originalLanguage);
   appendAll(qs, "includedTags[]", opts.includedTags);
+  appendAll(qs, "excludedTags[]", [...new Set([...BLOCKED_MDX_TAGS, ...(opts.excludedTags ?? [])])]);
   appendAll(qs, "contentRating[]", opts.contentRating ?? DEFAULT_RATINGS);
   if (opts.createdAtSince) qs.set("createdAtSince", opts.createdAtSince);
   if (opts.updatedAtSince) qs.set("updatedAtSince", opts.updatedAtSince);

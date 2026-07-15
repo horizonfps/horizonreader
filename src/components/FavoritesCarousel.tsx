@@ -105,7 +105,7 @@ export default function FavoritesCarousel({ items }: { items: FavItem[] }) {
                           alt=""
                           loading="lazy"
                           draggable={false}
-                          className="h-full w-full object-cover"
+                          className="cover-img h-full w-full object-cover"
                         />
                       ) : null}
                       {item.rating != null ? (

@@ -17,7 +17,13 @@ function MangaCard({ item }: { item: Card }) {
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" />
+          <img
+            src={src}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            className="cover-img h-full w-full object-cover"
+          />
         ) : null}
         {item.rating != null ? (
           <span className="absolute right-1 top-1 flex items-center gap-0.5 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium backdrop-blur">

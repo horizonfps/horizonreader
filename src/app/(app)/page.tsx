@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { coverProxy } from "@/lib/cards";
 import { getHomeSections } from "@/lib/backbone/sections";
 import WindowTabs from "@/components/WindowTabs";
 import SectionRow from "@/components/SectionRow";
+import CardRow from "@/components/CardRow";
 import InfiniteGrid from "@/components/InfiniteGrid";
 import FavoritesCarousel from "@/components/FavoritesCarousel";
 
@@ -28,7 +28,7 @@ async function getHistory(userId: number): Promise<HistoryEntry[]> {
       if (!r.work || seen.has(r.workId)) continue;
       seen.add(r.workId);
       out.push({ slug: r.work.slug, title: r.work.title, coverUrl: r.work.coverUrl });
-      if (out.length >= 12) break;
+      if (out.length >= 30) break;
     }
     return out;
   } catch {
@@ -77,30 +77,13 @@ export default async function HomePage() {
       {history.length > 0 ? (
         <section>
           <h2 className="mb-2 text-sm text-muted">Continuar</h2>
-          <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
-            {history.map((h) => {
-              const src = coverProxy(h.coverUrl);
-              return (
-                <Link
-                  key={h.slug}
-                  href={`/work/${h.slug}`}
-                  className="flex-[0_0_31%] shrink-0 sm:flex-[0_0_23%]"
-                >
-                  <div className="aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
-                    {src ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={src}
-                        alt=""
-                        loading="lazy"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : null}
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+          <CardRow
+            items={history.map((h) => ({
+              href: `/work/${h.slug}`,
+              title: h.title,
+              coverUrl: h.coverUrl,
+            }))}
+          />
         </section>
       ) : null}
 

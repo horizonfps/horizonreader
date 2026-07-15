@@ -36,6 +36,8 @@ export type SectionItem = {
   status?: WorkStatus | null;
   rating?: number | null;
   chapterCount?: number | null;
+  genres?: string[]; // for content filtering
+  contentRating?: string | null; // for content filtering
 };
 
 export type TimeWindow = "7d" | "30d" | "90d" | "6m" | "12m" | "all";

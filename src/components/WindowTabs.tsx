@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import type { Card } from "@/lib/cards";
-import CardGrid from "@/components/CardGrid";
+import { workHref } from "@/lib/cards";
+import CardRow from "@/components/CardRow";
 
 type Tab = { key: string; label: string; items: Card[] };
 
-const SECTION_LIMIT = 8;
+const ROW_LIMIT = 30;
 
 export default function WindowTabs({
   title,
@@ -20,6 +21,13 @@ export default function WindowTabs({
   if (!visible.length) return null;
 
   const current = visible[Math.min(active, visible.length - 1)];
+  const rowItems = current.items.slice(0, ROW_LIMIT).map((it) => ({
+    href: workHref(it),
+    title: it.title,
+    coverUrl: it.coverUrl,
+    rating: it.rating,
+    type: it.type,
+  }));
   return (
     <section className="mt-6">
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -42,7 +50,7 @@ export default function WindowTabs({
           );
         })}
       </div>
-      <CardGrid items={current.items} limit={SECTION_LIMIT} />
+      <CardRow items={rowItems} />
     </section>
   );
 }

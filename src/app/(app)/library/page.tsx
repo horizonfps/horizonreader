@@ -73,7 +73,13 @@ export default async function LibraryPage({
                 <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
                   {src ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" />
+                    <img
+                      src={src}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                      className="cover-img h-full w-full object-cover"
+                    />
                   ) : null}
                   <RatingBadge rating={work.rating} />
                 </div>

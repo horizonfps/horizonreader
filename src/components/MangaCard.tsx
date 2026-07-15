@@ -24,7 +24,8 @@ export default function MangaCard({
             src={src}
             alt=""
             loading="lazy"
-            className="h-full w-full object-cover"
+            draggable={false}
+            className="cover-img h-full w-full object-cover"
           />
         ) : null}
         <RatingBadge rating={item.rating} />

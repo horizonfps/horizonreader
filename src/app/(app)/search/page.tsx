@@ -1,10 +1,20 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search } from "lucide-react";
+import { Search, User as UserIcon } from "lucide-react";
 import MangaCard from "@/components/MangaCard";
-import type { Card } from "@/lib/cards";
+import Username from "@/components/Username";
+import AdminBadge from "@/components/AdminBadge";
+import { coverProxy, type Card } from "@/lib/cards";
+
+type TopUser = {
+  username: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  isAdmin: boolean;
+};
 
 function SearchView() {
   const router = useRouter();
@@ -14,7 +24,22 @@ function SearchView() {
   const [items, setItems] = useState<Card[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [users, setUsers] = useState<TopUser[]>([]);
   const reqId = useRef(0);
+
+  // Pinned top-10 users, loaded once.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/users/top")
+      .then((r) => r.json())
+      .then((d: { users?: TopUser[] }) => {
+        if (alive) setUsers(Array.isArray(d.users) ? d.users : []);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Debounced search + URL sync; stale responses are dropped via reqId.
   useEffect(() => {
@@ -67,6 +92,48 @@ function SearchView() {
           className="w-full rounded-lg border border-border bg-surface py-2 pl-9 pr-3 text-sm outline-none focus:ring-1 focus:ring-accent"
         />
       </form>
+
+      {users.length > 0 ? (
+        <section className="mt-4">
+          <h2 className="mb-2 text-sm font-semibold text-text">Usuários</h2>
+          <div className="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-1">
+            {users.map((u) => {
+              const src = coverProxy(u.avatarUrl);
+              return (
+                <Link
+                  key={u.username}
+                  href={`/u/${encodeURIComponent(u.username)}`}
+                  className="flex w-16 shrink-0 flex-col items-center gap-1"
+                >
+                  <div className="h-14 w-14 overflow-hidden rounded-full border border-border bg-surface">
+                    {src ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={src}
+                        alt=""
+                        draggable={false}
+                        className="cover-img h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-muted">
+                        <UserIcon className="h-6 w-6" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex max-w-full items-center gap-1">
+                    <Username
+                      name={u.displayName || u.username}
+                      isAdmin={u.isAdmin}
+                      className="truncate text-[11px] text-text"
+                    />
+                    {u.isAdmin ? <AdminBadge className="h-3.5 w-3.5" /> : null}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       {items.length > 0 ? (
         <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">

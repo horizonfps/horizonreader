@@ -129,11 +129,11 @@ export default function ProfileEditForm({ initial }: { initial: ProfileFields })
         onChange={(e) => onPick("avatar", e)}
       />
 
-      <span className="text-xs text-muted">Banner</span>
+      <span className="text-xs text-muted">Banner (5:2 — ex.: 600×240)</span>
       <button
         type="button"
         onClick={() => bannerInput.current?.click()}
-        className="relative h-28 w-full overflow-hidden rounded-xl border border-border bg-elevated bg-cover bg-center"
+        className="relative aspect-[5/2] w-full overflow-hidden rounded-xl border border-border bg-elevated bg-cover bg-center"
         style={bannerPreview ? { backgroundImage: `url("${bannerPreview}")` } : undefined}
       >
         <span className="absolute inset-0 flex items-center justify-center gap-2 bg-black/30 text-xs text-white">

@@ -2,6 +2,7 @@
 
 import { getSession } from "@/lib/session";
 import { listMangaDex } from "@/lib/backbone/mangadex";
+import { isBlocked } from "@/lib/backbone/filter";
 import { backboneToCard } from "@/lib/cards";
 
 export const runtime = "nodejs";
@@ -24,9 +25,12 @@ export async function GET(req: Request) {
       limit: PAGE,
       offset,
     });
-    const items = works.map(backboneToCard);
+    const items = works
+      .map(backboneToCard)
+      .filter((c) => !isBlocked({ genres: c.genres, contentRating: c.contentRating }));
+    // Page fullness uses the raw fetch count so pagination is not cut short by filtering.
     const nextCursor =
-      items.length === PAGE && offset + PAGE <= MAX_OFFSET ? offset + PAGE : null;
+      works.length === PAGE && offset + PAGE <= MAX_OFFSET ? offset + PAGE : null;
     return Response.json({ items, nextCursor });
   } catch {
     return Response.json({ items: [], nextCursor: null });

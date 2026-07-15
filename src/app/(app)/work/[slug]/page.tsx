@@ -137,7 +137,7 @@ export default async function WorkPage({
         <div className="relative aspect-[2/3] w-28 shrink-0 overflow-hidden rounded-lg bg-surface">
           {cover ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={cover} alt="" className="h-full w-full object-cover" />
+            <img src={cover} alt="" draggable={false} className="cover-img h-full w-full object-cover" />
           ) : null}
           <RatingBadge rating={work.rating} />
         </div>

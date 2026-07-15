@@ -16,6 +16,8 @@ export function backboneToCard(bw: BackboneWork): Card {
     status: bw.status ?? null,
     rating: bw.rating ?? null,
     chapterCount: null,
+    genres: bw.genres ?? [],
+    contentRating: bw.contentRating ?? null,
   };
 }
 

@@ -21,7 +21,10 @@ export async function getComickTop(): Promise<any> {
   const now = Date.now();
   if (topCache && now - topCache.at < TOP_TTL) return topCache.data;
   try {
-    const res = await fetch(`${BASE}/top`, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(`${BASE}/top?accept_mature_content=false`, {
+      headers: HEADERS,
+      cache: "no-store",
+    });
     if (!res.ok) return topCache?.data ?? null;
     const data = await res.json();
     topCache = { data, at: now };
@@ -74,6 +77,17 @@ function coverUrl(item: any): string | null {
   return key ? `${COVERS}/${key}` : null;
 }
 
+// Genre names carried by /top items (md_comic_md_genres[].md_genres.name/slug).
+function comickGenres(item: any): string[] {
+  const raw = Array.isArray(item?.md_comic_md_genres) ? item.md_comic_md_genres : [];
+  const out: string[] = [];
+  for (const g of raw) {
+    const name = g?.md_genres?.name || g?.md_genres?.slug;
+    if (typeof name === "string" && name) out.push(name);
+  }
+  return out;
+}
+
 function pickTitle(item: any, alt: string[]): string {
   if (item?.title) return item.title;
   const md = Array.isArray(item?.md_titles) ? item.md_titles : [];
@@ -94,6 +108,8 @@ function toSectionItem(item: any): SectionItem {
     status: comickStatus(item?.status),
     rating: numOrNull(item?.rating),
     chapterCount: numOrNull(item?.last_chapter),
+    genres: comickGenres(item),
+    contentRating: item?.content_rating ?? null,
   };
 }
 
@@ -187,7 +203,7 @@ function toBackboneWork(item: any): BackboneWork {
     year: numOrNull(item?.year) ?? numOrNull(item?.mu_comics?.year),
     rating: numOrNull(item?.rating),
     follows: numOrNull(item?.user_follow_count ?? item?.follow_count),
-    genres: [],
+    genres: comickGenres(item),
     muId: null,
   };
 }
@@ -220,6 +236,27 @@ async function searchViaFlareSolverr(url: string): Promise<any> {
   } catch {
     return null;
   }
+}
+
+// Minimal Comick detail lookup (genres + content_rating) used to vet a Comick
+// ref before resolving it, since refs carry no genre/rating in the URL.
+export async function getComickContentInfo(
+  hid: string,
+): Promise<{ genres: string[]; contentRating: string | null } | null> {
+  const id = (hid || "").trim();
+  if (!id) return null;
+  const url = `${BASE}/comic/${encodeURIComponent(id)}`;
+  let data: any = null;
+  try {
+    const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
+    if (res.ok) data = await res.json();
+    else if (res.status === 403) data = await searchViaFlareSolverr(url);
+  } catch {
+    data = await searchViaFlareSolverr(url);
+  }
+  const comic = data?.comic;
+  if (!comic) return null;
+  return { genres: comickGenres(comic), contentRating: comic?.content_rating ?? null };
 }
 
 export async function searchComick(q: string): Promise<BackboneWork[]> {

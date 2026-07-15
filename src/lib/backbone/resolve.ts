@@ -4,12 +4,14 @@
 import { prisma } from "@/lib/db";
 import type { BackboneWork } from "@/lib/backbone/types";
 import { norm, matchKeys, slugify, tokenSetRatio } from "@/lib/backbone/normalize";
+import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
 import {
   searchMangaDex,
   getMangaDexManga,
   getMangaDexStatistics,
 } from "@/lib/backbone/mangadex";
+import { getComickContentInfo } from "@/lib/backbone/comick";
 import {
   listSources,
   browseSource,
@@ -405,6 +407,19 @@ export async function resolveWorkFromRef(
     }
 
     if (!bw) return null;
+
+    // A Comick-only ref (no MangaDex canonicalization) carries no genre/rating in
+    // the URL, so fetch Comick detail by hid before the policy guard below.
+    if (bw.origin === "comick") {
+      const info = await getComickContentInfo(ref.externalId);
+      if (info) {
+        bw.genres = info.genres;
+        bw.contentRating = info.contentRating;
+      }
+    }
+
+    // Content policy: never resolve/open NSFW or BL-GL works, even via a direct link.
+    if (isBlocked({ genres: bw.genres, contentRating: bw.contentRating })) return null;
 
     if (bw.origin === "mangadex") {
       try {
