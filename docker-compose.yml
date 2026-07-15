@@ -65,7 +65,7 @@ services:
       # EXTENSION_REPOS. Setting both is harmless.
       EXTENSION_STORES: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
       EXTENSION_REPOS: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
-      FLARESOLVERR_ENABLED: "true"
+      FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-false}"
       FLARESOLVERR_URL: "http://flaresolverr:8191"
       FLARESOLVERR_TIMEOUT: "60"
       FLARESOLVERR_SESSION_NAME: "suwayomi"
@@ -74,16 +74,16 @@ services:
       # Order matters: downloads must be mounted before the data dir.
       - ./suwayomi/downloads:/home/suwayomi/.local/share/Tachidesk/downloads
       - ./suwayomi/data:/home/suwayomi/.local/share/Tachidesk
-    depends_on:
-      - flaresolverr
     networks:
       - manga
 
-  # ---- Cloudflare challenge solver for protected sources (internal only) ----
+  # ---- Cloudflare challenge solver: opt-in, heavy (Chromium). Enable with
+  #      `--profile flaresolverr` + FLARESOLVERR_ENABLED=true. ----
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
     restart: unless-stopped
+    profiles: ["flaresolverr"]
     init: true
     environment:
       TZ: America/Sao_Paulo

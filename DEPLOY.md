@@ -30,6 +30,8 @@ docker compose up -d --build web
 
 - Teste local: http://localhost:41573
 - Admin do Suwayomi (extensões / fontes): http://localhost:4567 (só localhost).
+- FlareSolverr (fontes protegidas por Cloudflare) é opcional e pesado. Para ligar:
+  `FLARESOLVERR_ENABLED=true` no `.env` e `docker compose --profile flaresolverr up -d`.
 
 ## 2. Cloudflare Tunnel → app
 
