@@ -25,6 +25,19 @@ const MID: Array<[string, number]> = [
   ["mangapill", 0.55],
   ["mangafox", 0.52],
   ["mangahere", 0.52],
+  ["mangaread", 0.55],
+  ["flower", 0.5],
+  // pt-BR scan sources
+  ["sussytoons", 0.62],
+  ["sussy", 0.6],
+  ["neox", 0.58],
+  ["argos", 0.58],
+  ["slaverse", 0.56],
+  ["yushuke", 0.55],
+  ["mangalivre", 0.55],
+  ["union", 0.54],
+  ["rede manga", 0.52],
+  ["mangas chan", 0.52],
 ];
 
 export function sourcePrior(sourceName?: string | null): number {

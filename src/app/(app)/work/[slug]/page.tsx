@@ -6,6 +6,7 @@ import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { getWorkWithLinks, resolveSourcesForWork } from "@/lib/backbone/resolve";
 import { getMangaEnsured, getChapters } from "@/lib/suwayomi";
+import { getNativeChapters } from "@/lib/scrapers/native";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
@@ -184,8 +185,17 @@ async function SourcesAndChapters({
   const selectedId = src ? Number(src) : null;
   const selected = links.find((l) => l.id === selectedId) ?? links[0] ?? null;
 
-  let chapters: Awaited<ReturnType<typeof getChapters>> = [];
-  if (selected) {
+  type ChapterView = {
+    id: number;
+    name: string;
+    chapterNumber: number;
+    scanlator?: string | null;
+    uploadDate?: string | null;
+  };
+  let chapters: ChapterView[] = [];
+  if (selected?.kind === "scraper") {
+    chapters = await getNativeChapters(selected.id).catch(() => []);
+  } else if (selected) {
     await getMangaEnsured(selected.sourceMangaId).catch(() => null);
     chapters = await getChapters(selected.sourceMangaId).catch(() => []);
   }

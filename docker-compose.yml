@@ -61,10 +61,12 @@ services:
       # auto-download new chapters of followed titles.
       AUTO_DOWNLOAD_CHAPTERS: "false"
       AUTO_DOWNLOAD_NEW_CHAPTERS_LIMIT: "0"
-      # Keiyoushi source repo. v2.3.x uses EXTENSION_STORES; older builds use
-      # EXTENSION_REPOS. Setting both is harmless.
-      EXTENSION_STORES: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
-      EXTENSION_REPOS: '["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]'
+      # Extension repos (JSON array). Keiyoushi is the default and already bundles
+      # hundreds of sources across languages, including English and pt-BR. Override
+      # EXTENSION_REPOS in .env to add more repos. v2.3.x uses EXTENSION_STORES;
+      # older builds use EXTENSION_REPOS. Setting both is harmless.
+      EXTENSION_STORES: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
+      EXTENSION_REPOS: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
       FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-false}"
       FLARESOLVERR_URL: "http://flaresolverr:8191"
       FLARESOLVERR_TIMEOUT: "60"

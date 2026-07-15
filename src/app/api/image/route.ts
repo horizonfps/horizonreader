@@ -1,24 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
+import { scraperHosts } from "@/lib/scrapers";
 
 export const runtime = "nodejs";
 
 const BASE = process.env.SUWAYOMI_URL || "http://localhost:4567";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 
-// Streams Suwayomi covers/pages through the app. Session required; only
-// Suwayomi image paths are allowed (SSRF guard).
+// Streams Suwayomi covers/pages and native-scraper page images through the app.
+// Session required; only Suwayomi paths and whitelisted scraper hosts are allowed
+// (SSRF guard). Scraper images carry a Referer to defeat hotlink protection.
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const path = req.nextUrl.searchParams.get("path") || "";
-  if (!path.startsWith("/api/v1/")) {
-    return NextResponse.json({ error: "bad_path" }, { status: 400 });
+  const sp = req.nextUrl.searchParams;
+  const path = sp.get("path") || "";
+  const ext = sp.get("url") || "";
+
+  let target: string;
+  let referer: string | undefined;
+
+  if (ext) {
+    let u: URL;
+    try {
+      u = new URL(ext);
+    } catch {
+      return NextResponse.json({ error: "bad_url" }, { status: 400 });
+    }
+    if (u.protocol !== "https:" || !scraperHosts().has(u.host)) {
+      return NextResponse.json({ error: "host_not_allowed" }, { status: 400 });
+    }
+    target = u.toString();
+    referer = `${u.protocol}//${u.host}/`;
+  } else {
+    if (!path.startsWith("/api/v1/")) {
+      return NextResponse.json({ error: "bad_path" }, { status: 400 });
+    }
+    target = BASE + path;
   }
 
-  const upstream = await fetch(BASE + path, { cache: "no-store" });
-  if (!upstream.ok || !upstream.body) {
-    return new NextResponse(null, { status: upstream.status || 502 });
+  const upstream = await fetch(target, {
+    cache: "no-store",
+    headers: referer ? { "User-Agent": UA, Referer: referer } : undefined,
+  }).catch(() => null);
+  if (!upstream || !upstream.ok || !upstream.body) {
+    return new NextResponse(null, { status: upstream?.status || 502 });
   }
 
   const headers = new Headers();

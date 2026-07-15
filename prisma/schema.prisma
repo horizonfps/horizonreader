@@ -72,26 +72,45 @@ model Work {
   @@index([status])
 }
 
-// Binds a canonical Work to one Suwayomi source-manga (a specific scan).
+// Binds a canonical Work to one scan (Suwayomi source-manga or native scraper).
 // healthScore ranks which scan is shown first when opening a Work.
 model SourceLink {
-  id            Int       @id @default(autoincrement())
-  workId        Int
-  sourceId      String // Suwayomi source id
-  sourceName    String?
-  sourceMangaId Int // Suwayomi manga id
-  lang          String?
-  url           String?
-  isPrimary     Boolean   @default(false)
-  chapterCount  Int       @default(0)
-  latestAt      DateTime?
-  healthScore   Float     @default(0)
-  lastSyncedAt  DateTime?
-  createdAt     DateTime  @default(now())
-  work          Work      @relation(fields: [workId], references: [id], onDelete: Cascade)
+  id             Int              @id @default(autoincrement())
+  workId         Int
+  sourceId       String // Suwayomi source id or scraper id (e.g. "madara:mangaread")
+  sourceName     String?
+  sourceMangaId  Int // Suwayomi manga id, or a stable hash of sourceMangaKey for scrapers
+  kind           String           @default("suwayomi") // "suwayomi" | "scraper"
+  sourceMangaKey String? // native scraper manga URL
+  lang           String?
+  url            String?
+  isPrimary      Boolean          @default(false)
+  chapterCount   Int              @default(0)
+  latestAt       DateTime?
+  healthScore    Float            @default(0)
+  lastSyncedAt   DateTime?
+  createdAt      DateTime         @default(now())
+  work           Work             @relation(fields: [workId], references: [id], onDelete: Cascade)
+  scrapedChapters ScrapedChapter[]
 
   @@unique([sourceId, sourceMangaId])
   @@index([workId])
+}
+
+// Persisted chapters for native scraper links. The reader/progress layer keys on
+// integer chapter ids, so each row's id maps to a public id (NATIVE_OFFSET + id).
+model ScrapedChapter {
+  id           Int        @id @default(autoincrement())
+  sourceLinkId Int
+  chapterKey   String // chapter page URL
+  name         String
+  number       Float      @default(0)
+  uploadDate   DateTime?
+  createdAt    DateTime   @default(now())
+  sourceLink   SourceLink @relation(fields: [sourceLinkId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceLinkId, chapterKey])
+  @@index([sourceLinkId])
 }
 
 // Per-user favorite/library entry with reading status.

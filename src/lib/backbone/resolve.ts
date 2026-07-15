@@ -21,10 +21,20 @@ import {
   type SuwayomiSource,
   type SuwayomiManga,
 } from "@/lib/suwayomi";
+import { SCRAPERS } from "@/lib/scrapers";
+import { keyToMangaId, syncNativeChapters } from "@/lib/scrapers/native";
 
 const DAY_MS = 86_400_000;
 const SOURCE_TIMEOUT = 8_000;
+const SCRAPER_TIMEOUT = 90_000;
 const MATCH_THRESHOLD = 0.88;
+
+// Scan-source languages to search. Suwayomi reports Brazilian Portuguese as
+// "pt-BR" (some sources as "pt"); normalize both.
+const PREFERRED_LANGS = new Set(["en", "pt-br", "pt"]);
+function normLang(lang?: string | null): string {
+  return (lang || "").toLowerCase();
+}
 
 // ---- helpers ----
 
@@ -226,21 +236,106 @@ async function syncMatch(source: SuwayomiSource, workId: number, result: Suwayom
   }
 }
 
-async function processSource(
+async function searchAndMatch(
   source: SuwayomiSource,
   workId: number,
   query: string,
   titles: string[],
+): Promise<boolean> {
+  const { mangas } = await browseSource(source.id, "SEARCH", 1, query);
+  let matched = false;
+  for (const result of (mangas ?? []).slice(0, 5)) {
+    let best = 0;
+    for (const t of titles) best = Math.max(best, tokenSetRatio(result.title, t));
+    if (best >= MATCH_THRESHOLD) {
+      await syncMatch(source, workId, result);
+      matched = true;
+    }
+  }
+  return matched;
+}
+
+async function processSource(
+  source: SuwayomiSource,
+  workId: number,
+  queries: string[],
+  titles: string[],
 ) {
   try {
-    const { mangas } = await browseSource(source.id, "SEARCH", 1, query);
-    for (const result of (mangas ?? []).slice(0, 5)) {
-      let best = 0;
-      for (const t of titles) best = Math.max(best, tokenSetRatio(result.title, t));
-      if (best >= MATCH_THRESHOLD) await syncMatch(source, workId, result);
+    // Try each query in order (English first, then localized alt titles) until a
+    // match lands. pt-BR scan sites index by the Portuguese title, so an English
+    // query alone misses them.
+    for (const query of queries) {
+      if (await searchAndMatch(source, workId, query, titles)) return;
     }
   } catch (e) {
     console.warn(`[resolve] processSource failed (source ${source.id})`, e);
+  }
+}
+
+async function processScraper(
+  scraper: (typeof SCRAPERS)[number],
+  workId: number,
+  queries: string[],
+  titles: string[],
+) {
+  try {
+    let match: { key: string; title: string } | null = null;
+    for (const query of queries) {
+      const results = await scraper.search(query).catch(() => []);
+      for (const r of results.slice(0, 5)) {
+        let best = 0;
+        for (const t of titles) best = Math.max(best, tokenSetRatio(r.title, t));
+        if (best >= MATCH_THRESHOLD) {
+          match = r;
+          break;
+        }
+      }
+      if (match) break;
+    }
+    if (!match) return;
+
+    const sourceMangaId = keyToMangaId(match.key);
+    const link = await prisma.sourceLink.upsert({
+      where: { sourceId_sourceMangaId: { sourceId: scraper.id, sourceMangaId } },
+      create: {
+        workId,
+        sourceId: scraper.id,
+        sourceName: scraper.name,
+        sourceMangaId,
+        kind: "scraper",
+        sourceMangaKey: match.key,
+        lang: scraper.lang,
+        url: match.key,
+      },
+      update: { workId, sourceName: scraper.name, sourceMangaKey: match.key, url: match.key },
+      select: { id: true },
+    });
+
+    const { count, latestMs } = await syncNativeChapters({
+      id: link.id,
+      sourceId: scraper.id,
+      sourceMangaKey: match.key,
+    });
+    // A scraper that matched but yields no readable chapters (e.g. blocked by a
+    // challenge) is a dead source; drop the link so it isn't shown.
+    if (count === 0) {
+      await prisma.sourceLink.delete({ where: { id: link.id } }).catch(() => {});
+      return;
+    }
+    const latestAt = latestMs > 0 ? new Date(latestMs) : null;
+    const healthScore = scoreSourceLink({
+      sourceId: scraper.id,
+      sourceName: scraper.name,
+      chapterCount: count,
+      latestAt,
+    });
+    await prisma.sourceLink.update({
+      where: { id: link.id },
+      data: { chapterCount: count, latestAt, healthScore, lastSyncedAt: new Date() },
+    });
+  } catch (e) {
+    console.warn(`[resolve] processScraper failed (source ${scraper.id})`, e);
   }
 }
 
@@ -269,8 +364,11 @@ export async function resolveSourcesForWork(
   }
 
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
-  // work.title is the English title when MangaDex has one (see mapManga).
-  const query = work.title;
+  // work.title is the English title when MangaDex has one (see mapManga). Distinct
+  // alt titles feed a fallback search so pt-BR/native-indexed sources still match.
+  const queries = [...new Set([work.title, ...parseArr(work.altTitles)])]
+    .filter(Boolean)
+    .slice(0, 3);
 
   let sources: SuwayomiSource[] = [];
   try {
@@ -279,16 +377,22 @@ export async function resolveSourcesForWork(
     console.warn("[resolve] listSources failed", e);
     return;
   }
-  // Only English scan sources are relevant. Searching all ~250 (other languages
-  // included) overloads Suwayomi and causes timeout-induced misses.
-  const enSources = sources.filter((s) => s.lang === "en");
-  const targets = enSources.length ? enSources : sources;
+  // Only English and Brazilian-Portuguese scan sources are relevant. Searching all
+  // ~250 (every language) overloads Suwayomi and causes timeout-induced misses.
+  const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
+  const targets = wanted.length ? wanted : sources;
 
-  await Promise.allSettled(
-    targets.map((s) =>
-      withTimeout(processSource(s, workId, query, titles), SOURCE_TIMEOUT).catch(() => {}),
+  const nativeScrapers = SCRAPERS.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
+
+  await Promise.allSettled([
+    ...targets.map((s) =>
+      withTimeout(processSource(s, workId, queries, titles), SOURCE_TIMEOUT).catch(() => {}),
     ),
-  );
+    // Native scrapers may route through FlareSolverr, so give them more headroom.
+    ...nativeScrapers.map((s) =>
+      withTimeout(processScraper(s, workId, queries, titles), SCRAPER_TIMEOUT).catch(() => {}),
+    ),
+  ]);
 
   // Promote the healthiest link to primary.
   try {

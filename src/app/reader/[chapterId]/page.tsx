@@ -2,18 +2,65 @@ import { notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { fetchChapterPages, getChapters, proxied, pageUrl } from "@/lib/suwayomi";
+import { getScraper } from "@/lib/scrapers";
+import { NATIVE_OFFSET, isNativeChapterId, proxyScraperImage } from "@/lib/scrapers/native";
 import Reader from "@/components/Reader";
 
 export const dynamic = "force-dynamic";
 
-export default async function ReaderPage({ params }: { params: Promise<{ chapterId: string }> }) {
-  const { chapterId: cidStr } = await params;
-  const chapterId = Number(cidStr);
-  const session = await getSession();
-  if (!Number.isInteger(chapterId) || !session) notFound();
+type ReaderData = {
+  urls: string[];
+  mangaId: number;
+  workId: number | null;
+  workSlug: string | null;
+  chapterNumber?: number;
+  title: string;
+  prevId: number | null;
+  nextId: number | null;
+};
 
+// Native scraper chapter: pages scraped live, prev/next from persisted rows.
+async function loadNative(chapterId: number): Promise<ReaderData | null> {
+  const rowId = chapterId - NATIVE_OFFSET;
+  const row = await prisma.scrapedChapter
+    .findUnique({
+      where: { id: rowId },
+      include: { sourceLink: { include: { work: true } } },
+    })
+    .catch(() => null);
+  if (!row) return null;
+
+  const scraper = getScraper(row.sourceLink.sourceId);
+  if (!scraper) return null;
+
+  const pages = await scraper.pages(row.chapterKey).catch(() => []);
+  if (!pages.length) return null;
+
+  const siblings = await prisma.scrapedChapter.findMany({
+    where: { sourceLinkId: row.sourceLinkId },
+    orderBy: { number: "asc" },
+    select: { id: true },
+  });
+  const idx = siblings.findIndex((s) => s.id === rowId);
+  const prevId = idx > 0 ? NATIVE_OFFSET + siblings[idx - 1].id : null;
+  const nextId = idx >= 0 && idx < siblings.length - 1 ? NATIVE_OFFSET + siblings[idx + 1].id : null;
+
+  return {
+    urls: pages.map(proxyScraperImage),
+    mangaId: row.sourceLink.sourceMangaId,
+    workId: row.sourceLink.workId,
+    workSlug: row.sourceLink.work?.slug ?? null,
+    chapterNumber: row.number,
+    title: row.name,
+    prevId,
+    nextId,
+  };
+}
+
+// Suwayomi chapter: pages fetched from the engine, prev/next from its chapter list.
+async function loadSuwayomi(chapterId: number): Promise<ReaderData | null> {
   const data = await fetchChapterPages(chapterId).catch(() => null);
-  if (!data) notFound();
+  if (!data) return null;
 
   const { pages, mangaId, sourceOrder, pageCount } = data;
   const urls =
@@ -24,38 +71,56 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
   const chapters = await getChapters(mangaId).catch(() => []);
   const ordered = [...chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
   const idx = ordered.findIndex((c) => c.id === chapterId);
-  const prevId = idx > 0 ? ordered[idx - 1].id : null;
-  const nextId = idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].id : null;
-  const title = idx >= 0 ? ordered[idx].name : "";
-  const chapterNumber = idx >= 0 ? ordered[idx].chapterNumber : undefined;
 
-  // Resolve the canonical work so progress carries workId + chapterNumber and
-  // the reader can link back to the work page.
   const link = await prisma.sourceLink.findFirst({
     where: { sourceMangaId: mangaId },
     include: { work: true },
   });
-  const workId = link?.workId ?? null;
-  const workSlug = link?.work?.slug ?? null;
+
+  return {
+    urls,
+    mangaId,
+    workId: link?.workId ?? null,
+    workSlug: link?.work?.slug ?? null,
+    chapterNumber: idx >= 0 ? ordered[idx].chapterNumber : undefined,
+    title: idx >= 0 ? ordered[idx].name : "",
+    prevId: idx > 0 ? ordered[idx - 1].id : null,
+    nextId: idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].id : null,
+  };
+}
+
+export default async function ReaderPage({ params }: { params: Promise<{ chapterId: string }> }) {
+  const { chapterId: cidStr } = await params;
+  const chapterId = Number(cidStr);
+  const session = await getSession();
+  if (!Number.isInteger(chapterId) || !session) notFound();
+
+  const data = isNativeChapterId(chapterId)
+    ? await loadNative(chapterId)
+    : await loadSuwayomi(chapterId);
+  if (!data) notFound();
 
   const prog = await prisma.progress.findUnique({
     where: { userId_chapterId: { userId: session.uid, chapterId } },
   });
-  const initialPage = Math.min(Math.max(prog?.lastPageRead ?? 0, 0), Math.max(urls.length - 1, 0));
+  const initialPage = Math.min(
+    Math.max(prog?.lastPageRead ?? 0, 0),
+    Math.max(data.urls.length - 1, 0),
+  );
 
   return (
     <Reader
       key={chapterId}
       chapterId={chapterId}
-      mangaId={mangaId}
-      workId={workId}
-      workSlug={workSlug}
-      chapterNumber={chapterNumber}
-      pageUrls={urls}
+      mangaId={data.mangaId}
+      workId={data.workId}
+      workSlug={data.workSlug}
+      chapterNumber={data.chapterNumber}
+      pageUrls={data.urls}
       initialPage={initialPage}
-      title={title}
-      prevChapterId={prevId}
-      nextChapterId={nextId}
+      title={data.title}
+      prevChapterId={data.prevId}
+      nextChapterId={data.nextId}
     />
   );
 }
