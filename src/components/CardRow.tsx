@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { coverProxy } from "@/lib/cards";
+import PrefetchLink from "@/components/PrefetchLink";
 import RatingBadge from "@/components/RatingBadge";
 
 export type RowItem = {
@@ -24,7 +24,7 @@ export default function CardRow({
       {items.map((it, i) => {
         const src = coverProxy(it.coverUrl);
         return (
-          <Link
+          <PrefetchLink
             key={`${it.href}:${i}`}
             href={it.href}
             className="flex-[0_0_31%] shrink-0 sm:flex-[0_0_23%]"
@@ -50,7 +50,7 @@ export default function CardRow({
             {showTitle ? (
               <p className="mt-1 line-clamp-2 text-xs leading-tight text-text">{it.title}</p>
             ) : null}
-          </Link>
+          </PrefetchLink>
         );
       })}
     </div>

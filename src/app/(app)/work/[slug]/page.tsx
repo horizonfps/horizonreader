@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { BookOpen, Check } from "lucide-react";
@@ -53,33 +54,12 @@ export default async function WorkPage({
   searchParams: Promise<{ src?: string; refresh?: string }>;
 }) {
   const { slug } = await params;
-  const { src, refresh } = await searchParams;
+  const sp = await searchParams;
 
   const session = await getSession();
 
-  const workRow = await prisma.work.findUnique({ where: { slug } });
-  if (!workRow) notFound();
-
-  // Force a re-resolve, then strip the param (redirect throws; keep it unwrapped).
-  if (refresh) {
-    await resolveSourcesForWork(workRow.id, { force: true });
-    redirect(`/work/${slug}${src ? `?src=${src}` : ""}`);
-  }
-
-  let data = await getWorkWithLinks(workRow.id);
-  const stale =
-    !data ||
-    data.links.length === 0 ||
-    !data.links.some(
-      (l) => l.lastSyncedAt && Date.now() - new Date(l.lastSyncedAt).getTime() < DAY_MS,
-    );
-  if (stale) {
-    await resolveSourcesForWork(workRow.id);
-    data = await getWorkWithLinks(workRow.id);
-  }
-
-  const work = data?.work ?? workRow;
-  const links: any[] = data?.links ?? [];
+  const work = await prisma.work.findUnique({ where: { slug } });
+  if (!work) notFound();
 
   const favStatus = session
     ? (
@@ -88,44 +68,6 @@ export default async function WorkPage({
           .catch(() => null)
       )?.status ?? null
     : null;
-
-  // Source selection: ?src picks a link, else the ranked primary/first.
-  const selectedId = src ? Number(src) : null;
-  const selected = links.find((l) => l.id === selectedId) ?? links[0] ?? null;
-
-  let chapters: Awaited<ReturnType<typeof getChapters>> = [];
-  if (selected) {
-    await getMangaEnsured(selected.sourceMangaId).catch(() => null);
-    chapters = await getChapters(selected.sourceMangaId).catch(() => []);
-  }
-
-  const progressList =
-    session && selected
-      ? await prisma.progress
-          .findMany({ where: { userId: session.uid, mangaId: selected.sourceMangaId } })
-          .catch(() => [])
-      : [];
-
-  const chapterIds = new Set(chapters.map((c) => c.id));
-  const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
-
-  // Reading entry point: resume the in-progress chapter, else first unread.
-  const chaptersAsc = [...chapters].reverse();
-  let startId: number | null = null;
-  let startLabel = "Começar a ler";
-  if (chapters.length) {
-    const inProgress = progressList
-      .filter((p) => !p.read && p.lastPageRead > 0)
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-    if (inProgress && chapterIds.has(inProgress.chapterId)) {
-      startId = inProgress.chapterId;
-      startLabel = "Continuar";
-    } else {
-      const firstUnread = chaptersAsc.find((c) => !readSet.has(c.id));
-      startId = (firstUnread ?? chaptersAsc[0]).id;
-      startLabel = readSet.size > 0 ? "Continuar" : "Começar a ler";
-    }
-  }
 
   const cover = coverProxy(work.coverUrl);
   const genres = parseGenres(work.genres);
@@ -165,10 +107,123 @@ export default async function WorkPage({
         <p className="whitespace-pre-line text-sm leading-relaxed text-muted">{work.description}</p>
       ) : null}
 
+      <Suspense fallback={<SourcesSkeleton />}>
+        <SourcesAndChapters
+          slug={slug}
+          workId={work.id}
+          uid={session?.uid ?? null}
+          src={sp.src}
+          refresh={sp.refresh}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+function SourcesSkeleton() {
+  return (
+    <div className="space-y-6">
+      <section>
+        <h2 className="mb-2 text-sm text-muted">Fontes</h2>
+        <div className="flex gap-2">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-7 w-24 animate-pulse rounded-full bg-elevated" />
+          ))}
+        </div>
+      </section>
+      <section>
+        <h2 className="mb-2 text-sm text-muted">Capítulos</h2>
+        <div className="mb-3 h-10 w-full animate-pulse rounded-lg bg-elevated" />
+        <div className="space-y-2">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-9 w-full animate-pulse rounded bg-elevated/60" />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// Everything below the fold that depends on the expensive source resolution.
+// Streamed in a Suspense boundary so the header renders instantly.
+async function SourcesAndChapters({
+  slug,
+  workId,
+  uid,
+  src,
+  refresh,
+}: {
+  slug: string;
+  workId: number;
+  uid: number | null;
+  src?: string;
+  refresh?: string;
+}) {
+  // Force a re-resolve, then strip the param (redirect throws; keep it unwrapped).
+  if (refresh) {
+    await resolveSourcesForWork(workId, { force: true });
+    redirect(`/work/${slug}${src ? `?src=${src}` : ""}`);
+  }
+
+  let data = await getWorkWithLinks(workId);
+  const stale =
+    !data ||
+    data.links.length === 0 ||
+    !data.links.some(
+      (l) => l.lastSyncedAt && Date.now() - new Date(l.lastSyncedAt).getTime() < DAY_MS,
+    );
+  if (stale) {
+    await resolveSourcesForWork(workId);
+    data = await getWorkWithLinks(workId);
+  }
+
+  const work = data?.work ?? null;
+  const links: any[] = data?.links ?? [];
+
+  // Source selection: ?src picks a link, else the ranked primary/first.
+  const selectedId = src ? Number(src) : null;
+  const selected = links.find((l) => l.id === selectedId) ?? links[0] ?? null;
+
+  let chapters: Awaited<ReturnType<typeof getChapters>> = [];
+  if (selected) {
+    await getMangaEnsured(selected.sourceMangaId).catch(() => null);
+    chapters = await getChapters(selected.sourceMangaId).catch(() => []);
+  }
+
+  const progressList =
+    uid && selected
+      ? await prisma.progress
+          .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
+          .catch(() => [])
+      : [];
+
+  const chapterIds = new Set(chapters.map((c) => c.id));
+  const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
+
+  // Reading entry point: resume the in-progress chapter, else first unread.
+  const chaptersAsc = [...chapters].reverse();
+  let startId: number | null = null;
+  let startLabel = "Começar a ler";
+  if (chapters.length) {
+    const inProgress = progressList
+      .filter((p) => !p.read && p.lastPageRead > 0)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+    if (inProgress && chapterIds.has(inProgress.chapterId)) {
+      startId = inProgress.chapterId;
+      startLabel = "Continuar";
+    } else {
+      const firstUnread = chaptersAsc.find((c) => !readSet.has(c.id));
+      startId = (firstUnread ?? chaptersAsc[0]).id;
+      startLabel = readSet.size > 0 ? "Continuar" : "Começar a ler";
+    }
+  }
+
+  return (
+    <div className="space-y-6">
       <section>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm text-muted">Fontes</h2>
-          <RefreshSourcesButton workId={work.id} />
+          <RefreshSourcesButton workId={work?.id ?? workId} />
         </div>
         {links.length > 0 ? (
           <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">

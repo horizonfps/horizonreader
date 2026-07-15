@@ -1,6 +1,6 @@
-import Link from "next/link";
 import type { Card } from "@/lib/cards";
 import { coverProxy, workHref } from "@/lib/cards";
+import PrefetchLink from "@/components/PrefetchLink";
 import RatingBadge from "@/components/RatingBadge";
 
 function capitalize(s: string): string {
@@ -16,7 +16,7 @@ export default function MangaCard({
 }) {
   const src = coverProxy(item.coverUrl);
   return (
-    <Link href={workHref(item)} className="block">
+    <PrefetchLink href={workHref(item)} className="block">
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -38,6 +38,6 @@ export default function MangaCard({
       {showTitle ? (
         <p className="mt-1 line-clamp-2 text-xs leading-tight text-text">{item.title}</p>
       ) : null}
-    </Link>
+    </PrefetchLink>
   );
 }
