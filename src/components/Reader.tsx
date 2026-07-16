@@ -233,7 +233,11 @@ export default function Reader({
     <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
       {/* ---- content ---- */}
       {mode === "vertical" ? (
-        <div ref={containerRef} className="no-scrollbar h-full w-full overflow-y-auto">
+        <div
+          ref={containerRef}
+          onClick={() => setShowUI((v) => !v)}
+          className="no-scrollbar h-full w-full overflow-y-auto"
+        >
           {pageUrls.map((url, i) => (
             <div
               key={i}
@@ -279,25 +283,25 @@ export default function Reader({
         </div>
       )}
 
-      {/* ---- floating back-to-manga (always reachable) ---- */}
-      <Link
-        href={backHref}
-        aria-label="Voltar ao mangá"
-        className="absolute left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-lg leading-none text-white backdrop-blur"
-      >
-        ‹
-      </Link>
-
-      {/* ---- floating settings toggle ---- */}
-      <button
-        onClick={() => {
-          setShowUI(true);
-          setSettingsOpen((v) => !v);
-        }}
-        className="absolute right-3 top-3 z-30 rounded-full bg-black/60 px-3 py-2 text-xs text-white backdrop-blur"
-      >
-        ⚙
-      </button>
+      {/* ---- floating controls (only while the bars are hidden) ---- */}
+      {!showUI && !settingsOpen && (
+        <>
+          <Link
+            href={backHref}
+            aria-label="Voltar ao mangá"
+            className="absolute left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-lg leading-none text-white backdrop-blur"
+          >
+            ‹
+          </Link>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Ajustes"
+            className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-sm leading-none text-white backdrop-blur"
+          >
+            ⚙
+          </button>
+        </>
+      )}
 
       {/* ---- overlay UI ---- */}
       {showUI && (
