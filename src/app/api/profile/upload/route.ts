@@ -9,13 +9,22 @@ export const runtime = "nodejs";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
-const EXT_BY_MIME: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "image/avif": "avif",
-};
+// Extension comes from the file's magic bytes; the client-declared MIME type
+// is never trusted.
+function sniffImageExt(buf: Buffer): string | null {
+  if (buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "png";
+  if (buf.subarray(0, 4).toString("latin1") === "GIF8") return "gif";
+  if (
+    buf.subarray(0, 4).toString("latin1") === "RIFF" &&
+    buf.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "webp";
+  }
+  if (buf.subarray(4, 12).toString("latin1") === "ftypavif") return "avif";
+  return null;
+}
 
 // Accept an avatar/banner image file and store it under data/uploads, returning
 // an app-relative URL served (auth-gated) by /api/media.
@@ -35,11 +44,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "no file" }, { status: 400 });
   }
 
-  const ext = EXT_BY_MIME[file.type];
-  if (!ext) return NextResponse.json({ error: "unsupported type" }, { status: 415 });
   if (file.size > MAX_BYTES) return NextResponse.json({ error: "too large" }, { status: 413 });
 
   const buf = Buffer.from(await file.arrayBuffer());
+  const ext = sniffImageExt(buf);
+  if (!ext) return NextResponse.json({ error: "unsupported type" }, { status: 415 });
   const name = `${session.uid}-${randomUUID()}.${ext}`;
 
   try {

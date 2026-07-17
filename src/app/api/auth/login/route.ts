@@ -5,39 +5,62 @@ import { createSessionToken, SESSION_COOKIE, SESSION_MAX_AGE } from "@/lib/jwt";
 
 export const runtime = "nodejs";
 
-// Simple in-memory fixed-window rate limiter (per IP). Enough for a private,
-// small-user-base instance; resets on restart.
+// In-memory fixed-window rate limiter. Keyed by client IP and by target
+// username, so spoofing X-Forwarded-For alone cannot brute-force one account.
 const WINDOW_MS = 15 * 60 * 1000;
-const MAX_ATTEMPTS = 15;
+const MAX_PER_IP = 15;
+const MAX_PER_USER = 10;
+const MAX_KEYS = 5000;
 const attempts = new Map<string, { count: number; resetAt: number }>();
 
-function rateLimited(key: string): boolean {
+function pruneExpired(now: number) {
+  if (attempts.size < MAX_KEYS) return;
+  for (const [k, v] of attempts) {
+    if (now > v.resetAt) attempts.delete(k);
+  }
+}
+
+function rateLimited(key: string, max: number): boolean {
   const now = Date.now();
+  pruneExpired(now);
   const entry = attempts.get(key);
   if (!entry || now > entry.resetAt) {
     attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
     return false;
   }
   entry.count += 1;
-  return entry.count > MAX_ATTEMPTS;
+  return entry.count > max;
 }
 
 function clientKey(req: NextRequest): string {
-  const fwd = req.headers.get("x-forwarded-for");
-  return (fwd?.split(",")[0].trim() || req.headers.get("x-real-ip") || "local").toLowerCase();
+  // cf-connecting-ip is set by Cloudflare (the expected deploy front).
+  const ip =
+    req.headers.get("cf-connecting-ip") ||
+    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+    req.headers.get("x-real-ip") ||
+    "local";
+  return `ip:${ip.toLowerCase()}`;
+}
+
+function cookieSecure(): boolean {
+  const flag = process.env.COOKIE_SECURE;
+  if (flag != null) return flag === "true";
+  return process.env.NODE_ENV === "production";
 }
 
 export async function POST(req: NextRequest) {
-  if (rateLimited(clientKey(req))) {
-    return NextResponse.json({ error: "too_many_attempts" }, { status: 429 });
-  }
-
   const body = await req.json().catch(() => null);
   const username = body?.username;
   const password = body?.password;
 
   if (typeof username !== "string" || typeof password !== "string" || !username || !password) {
     return NextResponse.json({ error: "missing_credentials" }, { status: 400 });
+  }
+
+  const ipLimited = rateLimited(clientKey(req), MAX_PER_IP);
+  const userLimited = rateLimited(`user:${username.toLowerCase()}`, MAX_PER_USER);
+  if (ipLimited || userLimited) {
+    return NextResponse.json({ error: "too_many_attempts" }, { status: 429 });
   }
 
   const user = await prisma.user.findUnique({ where: { username } });
@@ -57,7 +80,7 @@ export async function POST(req: NextRequest) {
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.COOKIE_SECURE === "true",
+    secure: cookieSecure(),
     path: "/",
     maxAge: SESSION_MAX_AGE,
   });

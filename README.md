@@ -1,100 +1,125 @@
-# Manga — leitor privado
+# HorizonReader
 
-Site privado de leitura de mangá. O **Suwayomi-Server** roda como engine interno
-(faz o scraping das fontes de scan via extensões Mihon/Tachiyomi e baixa os
-capítulos); um app **Next.js** na frente entrega o leitor mobile-first, com login
-próprio e biblioteca/progresso por usuário.
+A self-hosted manga reader for people who are tired of scan sites dying, rebranding,
+drowning in ads, or losing your reading progress every other month. Host it yourself,
+read on your phone, and do your own gatekeeping: there is no public sign-up — you
+create accounts by hand for yourself and the friends you actually want around.
 
-- Sem cadastro e sem "esqueci a senha". Contas são criadas manualmente por CLI.
-- Biblioteca e progresso de leitura são **por usuário** (você e seus amigos não
-  veem o progresso um do outro).
-- O engine Suwayomi **não fica exposto** — só o app web publica porta.
+Under the hood, [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) does
+the heavy lifting (scraping sources through Mihon/Tachiyomi extensions and downloading
+chapters), while a Next.js app in front gives you a fast mobile-first reader with its
+own login, per-user library, and reading progress.
 
-## Arquitetura
+## What you get
+
+- **Mobile-first reader** with per-user library, favorites, reading progress, and
+  public profiles for your friend group.
+- **Multiple sources per title**, ranked by health (chapter count + recency), so when
+  one scan site breaks you just tap the next one.
+- **English + Brazilian Portuguese** sources out of the box (Keiyoushi extension repo,
+  plus a few native pt-BR scrapers), with MangaDex/Comick powering search, covers,
+  ratings, and metadata.
+- **Content filter built in**: pornographic works (hentai/erotica/smut) and BL/GL
+  titles are excluded from every discovery surface.
+- **Your own gatekeeping**: no sign-up page, no "forgot password". Accounts are
+  created by CLI, period.
+- **Privacy by design**: the browser only ever talks to the app. Covers and pages are
+  proxied server-side; Suwayomi is never exposed.
+- **xlsx export** of your reading list, if you ever want out.
+
+## Architecture
 
 ```
-navegador ──► app Next.js (login, leitor, proxy) ──► Suwayomi (interno) ──► fontes de scan
-                     │                                     │
-                 SQLite (usuários,                    FlareSolverr
-                 follows, progresso)                  (Cloudflare)
+browser ──► Next.js app (login, reader, proxy) ──► Suwayomi (internal) ──► scan sources
+                  │                                     │
+              SQLite (users,                       FlareSolverr
+              follows, progress)                   (Cloudflare, opt-in)
 ```
 
-O navegador nunca fala direto com o Suwayomi: páginas e capas passam pelo app,
-que exige sessão válida.
+## Run it (Docker)
 
-## Rodar (Docker)
-
-Pré-requisitos: Docker.
+Prerequisite: Docker.
 
 ```bash
 cp .env.example .env
-# gere um segredo e coloque em AUTH_SECRET dentro do .env:
+# generate a secret and put it in AUTH_SECRET inside .env:
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 docker compose up -d --build
 ```
 
-O app sobe em `http://localhost:3000`. O Suwayomi sobe interno, com sua WebUI de
-administração acessível só em `http://localhost:4567` (para instalar extensões e
-adicionar fontes na primeira vez).
+The app comes up at `http://localhost:3000`. Suwayomi runs internally, with its admin
+WebUI reachable only at `http://localhost:4567` (for installing extensions and adding
+sources the first time).
 
-### Primeiro uso
+### First use
 
-1. Abra `http://localhost:4567` (WebUI do Suwayomi) e, em **Browse → Extensions**,
-   instale as extensões das fontes que você quer (o repo Keiyoushi já vem
-   configurado). Adicione ao menos uma fonte.
-2. Crie sua conta:
+1. Open `http://localhost:4567` (Suwayomi WebUI) and, under **Browse → Extensions**,
+   install the extensions for the sources you want (the Keiyoushi repo is already
+   configured). Add at least one source.
+2. Create your account:
    ```bash
-   docker compose exec web npm run user -- add SEU_USUARIO SUA_SENHA --admin
+   docker compose exec web npm run user -- add YOUR_USER YOUR_PASSWORD --admin
    ```
-3. Acesse `http://localhost:3000`, faça login e comece a usar.
+3. Open `http://localhost:3000`, log in, start reading.
 
-## Gerenciar contas
+## Managing accounts
 
 ```bash
-docker compose exec web npm run user -- add   <usuario> <senha> [--admin]
-docker compose exec web npm run user -- passwd <usuario> <novaSenha>
-docker compose exec web npm run user -- remove <usuario>
+docker compose exec web npm run user -- add    <user> <password> [--admin]
+docker compose exec web npm run user -- passwd <user> <newPassword>
+docker compose exec web npm run user -- remove <user>
 docker compose exec web npm run user -- list
 ```
 
-(No dev, sem Docker, é só `npm run user -- ...`.)
+(In dev, without Docker, it is just `npm run user -- ...`.)
 
-## Desenvolvimento (para mexer na UI depois)
+## Development
 
-Suba só o engine no Docker e rode o app no host:
+Run only the engine in Docker and the app on the host:
 
 ```bash
-docker compose up -d suwayomi flaresolverr   # engine em localhost:4567
+docker compose up -d suwayomi   # engine at localhost:4567
 npm install
-npm run db:push        # cria prisma/dev.db
-npm run user -- add eu 123456 --admin
-npm run dev            # http://localhost:3000
+npm run db:push                 # creates prisma/dev.db
+npm run user -- add me 123456 --admin
+npm run dev                     # http://localhost:3000
 ```
 
-O `.env` de dev já aponta `SUWAYOMI_URL=http://localhost:4567`.
+Where things live:
 
-## Onde mexer
-
-- **UI/UX**: `src/app/(app)/**` (páginas) e `src/components/**`. Tema/cores em
-  `src/app/globals.css` (variáveis CSS) e `tailwind.config.ts`.
-- **Leitor**: `src/app/reader/[chapterId]/**`.
-- **Integração com o Suwayomi** (queries GraphQL): `src/lib/suwayomi.ts`.
+- **UI/UX**: `src/app/(app)/**` (pages) and `src/components/**`. Theme in
+  `src/app/globals.css` and `tailwind.config.ts`.
+- **Reader**: `src/app/reader/[chapterId]/**`.
+- **Suwayomi integration** (GraphQL): `src/lib/suwayomi.ts`.
+- **Native scrapers**: `src/lib/scrapers/**`. **Metadata backbone**
+  (MangaDex/Comick): `src/lib/backbone/**`.
 - **Auth**: `src/lib/jwt.ts`, `src/middleware.ts`, `src/app/login/**`.
-- **Banco** (usuários, follows, progresso): `prisma/schema.prisma`.
+- **Database** (users, favorites, progress): `prisma/schema.prisma`.
 
-## Segurança / privacidade
+## Security notes
 
-- Deixe fora da internet aberta. O jeito recomendado é acessar via **Tailscale/
-  WireGuard** e não fazer port-forward. Se expuser atrás de um reverse proxy com
-  HTTPS, ligue `COOKIE_SECURE=true`.
-- `robots` está como `noindex`; ainda assim, não divulgue a URL.
-- Conteúdo é de uso pessoal. Não redistribua.
+- Best kept off the open internet: access it through Tailscale/WireGuard, or put it
+  behind a reverse proxy / Cloudflare Tunnel with HTTPS (`COOKIE_SECURE=true`).
+- `robots` is `noindex`; still, do not hand out the URL.
+- FlareSolverr (for Cloudflare-protected sources) is opt-in and heavy:
+  `FLARESOLVERR_ENABLED=true` + `docker compose --profile flaresolverr up -d`.
 
-## Notas
+## Credits
 
-- `EXTENSION_STORES`/`EXTENSION_REPOS` no `docker-compose.yml` já apontam para o
-  repo Keiyoushi. Fontes quebram de tempos em tempos (mudança de site/Cloudflare);
-  atualizar a extensão na WebUI do Suwayomi resolve a maioria.
-- Downloads ficam em `./suwayomi/downloads` como `.cbz` (um por capítulo), prontos
-  para servir num Komga/Kavita no futuro, se quiser.
+This project stands on the shoulders of:
+
+- [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) — the scraping and
+  download engine.
+- [Keiyoushi extensions](https://github.com/keiyoushi/extensions) — hundreds of
+  sources across languages, from the Mihon/Tachiyomi ecosystem.
+- [MangaDex](https://api.mangadex.org/docs/) and [Comick](https://comick.io) — metadata,
+  search, covers, and ratings.
+- [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) — Cloudflare challenge
+  solving for stubborn sources.
+
+## Disclaimer
+
+HorizonReader hosts no content. It aggregates publicly available sources for personal
+use, same as any Mihon/Tachiyomi setup. Support official releases when you can, and
+don't redistribute what you download.

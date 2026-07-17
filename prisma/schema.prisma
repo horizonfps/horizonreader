@@ -17,7 +17,6 @@ model User {
   avatarUrl    String?
   bannerUrl    String?
   bio          String?
-  settings     String? // JSON blob for profile/reader preferences
   createdAt    DateTime         @default(now())
   follows      Follow[]
   progress     Progress[]
@@ -135,7 +134,6 @@ model Progress {
   id            Int      @id @default(autoincrement())
   userId        Int
   workId        Int?
-  sourceLinkId  Int?
   mangaId       Int
   chapterId     Int
   chapterNumber Float    @default(0)

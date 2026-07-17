@@ -67,19 +67,17 @@ export async function POST(req: NextRequest) {
     });
 
     // Record a reading event once we have a canonical work and real progress.
+    // updateMany-then-create keeps concurrent saves from stacking duplicates.
     if (workId != null && (read || lastPageRead > 0)) {
-      const existing = await prisma.readingHistory.findFirst({
-        where: { userId: session.uid, workId, chapterId },
-        orderBy: { readAt: "desc" },
-        select: { id: true },
-      });
       const data = { chapterNumber: chapterNumber ?? 0, lastPageRead, readAt: new Date() };
-      if (existing) {
-        await prisma.readingHistory.update({ where: { id: existing.id }, data });
-      } else {
-        await prisma.readingHistory.create({
-          data: { userId: session.uid, workId, chapterId, ...data },
-        });
+      const updated = await prisma.readingHistory.updateMany({
+        where: { userId: session.uid, workId, chapterId },
+        data,
+      });
+      if (updated.count === 0) {
+        await prisma.readingHistory
+          .create({ data: { userId: session.uid, workId, chapterId, ...data } })
+          .catch(() => {});
       }
     }
   } catch {

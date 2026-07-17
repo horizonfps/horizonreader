@@ -9,6 +9,13 @@ const MAX_LEN = 500;
 const FIELDS = ["displayName", "avatarUrl", "bannerUrl", "bio"] as const;
 type Field = (typeof FIELDS)[number];
 
+// Avatar/banner must point at an app-hosted upload; empty clears the field.
+// Anything else (external URLs included) is ignored.
+const MEDIA_URL = /^\/api\/media\/[a-zA-Z0-9._-]+$/;
+function isImageField(key: Field): boolean {
+  return key === "avatarUrl" || key === "bannerUrl";
+}
+
 // GET: the session user's public profile fields.
 export async function GET() {
   const session = await getSession();
@@ -50,7 +57,10 @@ export async function POST(req: Request) {
   const data: Partial<Record<Field, string>> = {};
   for (const key of FIELDS) {
     const raw = body[key];
-    if (typeof raw === "string") data[key] = raw.trim().slice(0, MAX_LEN);
+    if (typeof raw !== "string") continue;
+    const value = raw.trim().slice(0, MAX_LEN);
+    if (isImageField(key) && value && !MEDIA_URL.test(value)) continue;
+    data[key] = value;
   }
 
   if (Object.keys(data).length === 0) return NextResponse.json({ ok: true });

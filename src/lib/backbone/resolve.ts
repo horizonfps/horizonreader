@@ -25,6 +25,8 @@ import { SCRAPERS } from "@/lib/scrapers";
 import { keyToMangaId, syncNativeChapters } from "@/lib/scrapers/native";
 
 const DAY_MS = 86_400_000;
+const FORCE_COOLDOWN_MS = 120_000;
+const REF_FRESH_MS = 6 * 3_600_000;
 const SOURCE_TIMEOUT = 8_000;
 const SCRAPER_TIMEOUT = 90_000;
 const MATCH_THRESHOLD = 0.88;
@@ -357,11 +359,11 @@ export async function resolveSourcesForWork(
   }
   if (!work) return;
 
-  if (!force) {
-    const cutoff = Date.now() - DAY_MS;
-    const fresh = work.links.some((l) => l.lastSyncedAt && l.lastSyncedAt.getTime() >= cutoff);
-    if (fresh) return;
-  }
+  // Force skips the daily freshness check but keeps a short cooldown so the
+  // refresh button cannot hammer every source.
+  const cutoff = Date.now() - (force ? FORCE_COOLDOWN_MS : DAY_MS);
+  const fresh = work.links.some((l) => l.lastSyncedAt && l.lastSyncedAt.getTime() >= cutoff);
+  if (fresh) return;
 
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
   // work.title is the English title when MangaDex has one (see mapManga). Distinct
@@ -475,6 +477,18 @@ export async function resolveWorkFromRef(
   ref: WorkRef,
 ): Promise<{ workId: number; slug: string } | null> {
   try {
+    // A recently refreshed Work resolves straight from the DB, skipping the
+    // backbone fetch + upsert on every card click.
+    const cached = await prisma.work
+      .findUnique({
+        where: { origin_externalId: { origin: ref.origin, externalId: ref.externalId } },
+        select: { id: true, slug: true, updatedAt: true },
+      })
+      .catch(() => null);
+    if (cached && Date.now() - cached.updatedAt.getTime() < REF_FRESH_MS) {
+      return { workId: cached.id, slug: cached.slug };
+    }
+
     let bw: BackboneWork | null = null;
 
     if (ref.origin === "mangadex") {

@@ -27,19 +27,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "bad_manga_id" }, { status: 400 });
   }
 
-  if (follow) {
-    await prisma.follow.upsert({
-      where: { userId_mangaId: { userId: session.uid, mangaId } },
-      create: { userId: session.uid, mangaId },
-      update: {},
-    });
-    // Back the follow with Suwayomi's library so scheduled updates fetch new
-    // chapters for this title.
-    await addToLibrary(mangaId).catch(() => {});
-  } else {
-    await prisma.follow.deleteMany({ where: { userId: session.uid, mangaId } });
-    const others = await prisma.follow.count({ where: { mangaId } });
-    if (others === 0) await removeFromLibrary(mangaId).catch(() => {});
+  try {
+    if (follow) {
+      await prisma.follow.upsert({
+        where: { userId_mangaId: { userId: session.uid, mangaId } },
+        create: { userId: session.uid, mangaId },
+        update: {},
+      });
+      // Back the follow with Suwayomi's library so scheduled updates fetch new
+      // chapters for this title.
+      await addToLibrary(mangaId).catch(() => {});
+    } else {
+      // Delete and recount atomically so concurrent unfollows settle on the
+      // right library membership.
+      const others = await prisma.$transaction(async (tx) => {
+        await tx.follow.deleteMany({ where: { userId: session.uid, mangaId } });
+        return tx.follow.count({ where: { mangaId } });
+      });
+      if (others === 0) await removeFromLibrary(mangaId).catch(() => {});
+    }
+  } catch {
+    return NextResponse.json({ error: "failed" }, { status: 500 });
   }
 
   return NextResponse.json({ following: follow });

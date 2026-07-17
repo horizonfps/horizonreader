@@ -25,7 +25,8 @@ export function backboneToCard(bw: BackboneWork): Card {
 // MangaDex/Comick directly (privacy) and hotlink/referer checks are avoided.
 export function coverProxy(url?: string | null): string {
   if (!url) return "";
-  if (url.startsWith("/")) return url; // already app-relative (Suwayomi proxy etc.)
+  // App-relative paths pass through; protocol-relative ("//host") must not.
+  if (url.startsWith("/") && !url.startsWith("//")) return url;
   return `/api/cover?u=${encodeURIComponent(url)}`;
 }
 

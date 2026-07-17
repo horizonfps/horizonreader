@@ -43,13 +43,13 @@ export type SuwayomiChapter = {
   scanlator?: string | null;
   sourceOrder: number;
   chapterNumber: number;
-  isRead: boolean;
-  isDownloaded: boolean;
-  isBookmarked?: boolean;
-  pageCount?: number;
+  isRead?: boolean;
   uploadDate?: string;
   fetchedAt?: string;
 };
+
+// Hard ceiling on every engine call: a hung Suwayomi must not hang the app.
+const GQL_TIMEOUT_MS = 30_000;
 
 async function gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
   const res = await fetch(ENDPOINT, {
@@ -57,6 +57,7 @@ async function gql<T>(query: string, variables?: Record<string, unknown>): Promi
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
+    signal: AbortSignal.timeout(GQL_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Suwayomi ${res.status}`);
   const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
@@ -147,10 +148,7 @@ export async function getChapters(mangaId: number): Promise<SuwayomiChapter[]> {
   const data = await gql<{ chapters: { nodes: SuwayomiChapter[] } }>(
     `query GetChapters($condition: ChapterConditionInput, $order: [ChapterOrderInput!]) {
       chapters(condition: $condition, order: $order) {
-        nodes {
-          id name mangaId scanlator sourceOrder chapterNumber
-          isRead isDownloaded isBookmarked pageCount uploadDate fetchedAt
-        }
+        nodes { id name mangaId scanlator sourceOrder chapterNumber uploadDate }
       }
     }`,
     { condition: { mangaId }, order: [{ by: "SOURCE_ORDER", byType: "DESC" }] },

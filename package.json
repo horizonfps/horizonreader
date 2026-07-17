@@ -10,7 +10,6 @@
     "lint": "next lint",
     "db:push": "prisma db push",
     "user": "node --env-file-if-exists=.env --experimental-strip-types scripts/user.ts",
-    "backbone:sync": "node --env-file-if-exists=.env --experimental-strip-types scripts/backbone-sync.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -19,7 +18,6 @@
     "embla-carousel-react": "^8.5.2",
     "exceljs": "^4.4.0",
     "fastest-levenshtein": "^1.0.16",
-    "fuse.js": "^7.0.0",
     "jose": "^5.9.6",
     "lucide-react": "^0.469.0",
     "next": "^15.1.4",

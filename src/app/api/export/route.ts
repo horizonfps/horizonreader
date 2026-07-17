@@ -50,18 +50,25 @@ export async function GET() {
     headerRow.font = { bold: true };
     sheet.views = [{ state: "frozen", ySplit: 1 }];
 
+    let chapterByWork = new Map<number, number>();
+    try {
+      const grouped = await prisma.progress.groupBy({
+        by: ["workId"],
+        where: { userId: session.uid, workId: { in: favorites.map((f) => f.workId) } },
+        _max: { chapterNumber: true },
+      });
+      chapterByWork = new Map(
+        grouped
+          .filter((g) => g.workId != null && g._max.chapterNumber != null)
+          .map((g) => [g.workId as number, g._max.chapterNumber as number]),
+      );
+    } catch {
+      chapterByWork = new Map();
+    }
+
     for (const f of favorites) {
       const work = f.work;
-      let chapterNumber: number | "" = "";
-      try {
-        const progress = await prisma.progress.findFirst({
-          where: { userId: session.uid, workId: f.workId },
-          orderBy: { chapterNumber: "desc" },
-        });
-        chapterNumber = progress?.chapterNumber ?? "";
-      } catch {
-        chapterNumber = "";
-      }
+      const chapterNumber: number | "" = chapterByWork.get(f.workId) ?? "";
 
       sheet.addRow({
         title: work.title,

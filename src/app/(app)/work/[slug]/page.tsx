@@ -174,8 +174,13 @@ async function SourcesAndChapters({
       (l) => l.lastSyncedAt && Date.now() - new Date(l.lastSyncedAt).getTime() < DAY_MS,
     );
   if (stale) {
-    await resolveSourcesForWork(workId);
-    data = await getWorkWithLinks(workId);
+    if (data?.links.length) {
+      // Existing sources still render; refresh them off the request path.
+      void resolveSourcesForWork(workId).catch(() => {});
+    } else {
+      await resolveSourcesForWork(workId);
+      data = await getWorkWithLinks(workId);
+    }
   }
 
   const work = data?.work ?? null;
