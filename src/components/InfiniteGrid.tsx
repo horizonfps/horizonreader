@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import Link from "next/link";
 import useSWRInfinite from "swr/infinite";
 import { Star } from "lucide-react";
 import { coverProxy, workHref, type Card } from "@/lib/cards";
+import PrefetchLink from "@/components/PrefetchLink";
 
 type Page = { items: Card[]; nextCursor: number | null };
 
@@ -13,7 +13,7 @@ const fetcher = (url: string): Promise<Page> => fetch(url).then((r) => r.json())
 function MangaCard({ item }: { item: Card }) {
   const src = coverProxy(item.coverUrl);
   return (
-    <Link href={workHref(item)} className="block">
+    <PrefetchLink href={workHref(item)} className="block">
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -38,7 +38,7 @@ function MangaCard({ item }: { item: Card }) {
         ) : null}
       </div>
       <p className="mt-1 line-clamp-2 text-xs leading-tight text-text">{item.title}</p>
-    </Link>
+    </PrefetchLink>
   );
 }
 

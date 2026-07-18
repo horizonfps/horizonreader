@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import Link from "next/link";
 import useEmblaCarousel from "embla-carousel-react";
 import type { EmblaCarouselType } from "embla-carousel";
 import { Star, ChevronLeft, ChevronRight } from "lucide-react";
 import { coverProxy } from "@/lib/cards";
+import PrefetchLink from "@/components/PrefetchLink";
 
 type FavItem = {
   slug: string;
@@ -93,7 +93,7 @@ export default function FavoritesCarousel({ items }: { items: FavItem[] }) {
             return (
               <div key={item.slug} className="min-w-0 flex-[0_0_66%] px-2 sm:flex-[0_0_46%]">
                 <div className="fav-tween origin-center will-change-transform">
-                  <Link
+                  <PrefetchLink
                     href={`/work/${item.slug}`}
                     className="block overflow-hidden rounded-xl border border-border bg-surface shadow-lg shadow-black/50"
                   >
@@ -121,7 +121,7 @@ export default function FavoritesCarousel({ items }: { items: FavItem[] }) {
                         <div className="mt-2 h-px w-full bg-white/25" />
                       </div>
                     </div>
-                  </Link>
+                  </PrefetchLink>
                 </div>
               </div>
             );

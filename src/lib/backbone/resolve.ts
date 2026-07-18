@@ -204,6 +204,14 @@ async function syncMatch(source: SuwayomiSource, workId: number, result: Suwayom
       getChapters(result.id).catch(() => [] as Awaited<ReturnType<typeof getChapters>>),
     ]);
     const chapterCount = manga?.chapters?.totalCount ?? chapters.length ?? 0;
+    // A match without readable chapters is a dead source; keep it out so it
+    // neither shows in the UI nor marks the work as freshly synced.
+    if (chapterCount === 0) {
+      await prisma.sourceLink
+        .deleteMany({ where: { sourceId: source.id, sourceMangaId: result.id } })
+        .catch(() => {});
+      return;
+    }
     let latestMs = 0;
     for (const c of chapters) latestMs = Math.max(latestMs, parseUploadDate(c.uploadDate));
     const latestAt = latestMs > 0 ? new Date(latestMs) : null;
@@ -347,11 +355,19 @@ export async function resolveSourcesForWork(
 ): Promise<void> {
   const force = opts?.force ?? false;
 
-  let work: { title: string; altTitles: string | null; links: { lastSyncedAt: Date | null }[] } | null;
+  let work: {
+    title: string;
+    altTitles: string | null;
+    links: { lastSyncedAt: Date | null; chapterCount: number }[];
+  } | null;
   try {
     work = await prisma.work.findUnique({
       where: { id: workId },
-      select: { title: true, altTitles: true, links: { select: { lastSyncedAt: true } } },
+      select: {
+        title: true,
+        altTitles: true,
+        links: { select: { lastSyncedAt: true, chapterCount: true } },
+      },
     });
   } catch (e) {
     console.warn(`[resolve] load work ${workId} failed`, e);
@@ -360,9 +376,12 @@ export async function resolveSourcesForWork(
   if (!work) return;
 
   // Force skips the daily freshness check but keeps a short cooldown so the
-  // refresh button cannot hammer every source.
+  // refresh button cannot hammer every source. Only links that actually carry
+  // chapters count as fresh; zero-chapter links must not park a work for a day.
   const cutoff = Date.now() - (force ? FORCE_COOLDOWN_MS : DAY_MS);
-  const fresh = work.links.some((l) => l.lastSyncedAt && l.lastSyncedAt.getTime() >= cutoff);
+  const fresh = work.links.some(
+    (l) => l.chapterCount > 0 && l.lastSyncedAt && l.lastSyncedAt.getTime() >= cutoff,
+  );
   if (fresh) return;
 
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
@@ -372,12 +391,12 @@ export async function resolveSourcesForWork(
     .filter(Boolean)
     .slice(0, 3);
 
+  // A dead Suwayomi must not block native scrapers; they run independently.
   let sources: SuwayomiSource[] = [];
   try {
     sources = await listSources();
   } catch (e) {
     console.warn("[resolve] listSources failed", e);
-    return;
   }
   // Only English and Brazilian-Portuguese scan sources are relevant. Searching all
   // ~250 (every language) overloads Suwayomi and causes timeout-induced misses.

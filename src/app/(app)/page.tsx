@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { getHomeSections } from "@/lib/backbone/sections";
+import { getHorizonPicks } from "@/lib/backbone/recommend";
 import WindowTabs from "@/components/WindowTabs";
 import SectionRow from "@/components/SectionRow";
 import CardRow from "@/components/CardRow";
@@ -62,10 +63,11 @@ export default async function HomePage() {
   if (!session) return null;
   const userId = session.uid;
 
-  const [history, favorites, sections] = await Promise.all([
+  const [history, favorites, sections, horizonPicks] = await Promise.all([
     getHistory(userId),
     getFavorites(userId),
     getHomeSections().catch(() => null),
+    getHorizonPicks(userId),
   ]);
 
   const popular = sections?.popular;
@@ -100,6 +102,8 @@ export default async function HomePage() {
           </p>
         )}
       </section>
+
+      <SectionRow title="Horizon Recomenda" items={horizonPicks} />
 
       {popular ? (
         <WindowTabs
