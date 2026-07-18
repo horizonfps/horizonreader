@@ -10,6 +10,7 @@
     "lint": "next lint",
     "db:push": "prisma db push",
     "user": "node --env-file-if-exists=.env --experimental-strip-types scripts/user.ts",
+    "fix-titles": "node --env-file-if-exists=.env --experimental-strip-types scripts/fix-titles.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

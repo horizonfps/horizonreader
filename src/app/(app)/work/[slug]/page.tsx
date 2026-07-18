@@ -61,7 +61,12 @@ export default async function WorkPage({
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ src?: string; refresh?: string }>;
 }) {
-  const { slug } = await params;
+  // Route params arrive percent-encoded; legacy non-ASCII slugs need decoding.
+  const { slug: rawSlug } = await params;
+  let slug = rawSlug;
+  try {
+    slug = decodeURIComponent(rawSlug);
+  } catch {}
   const sp = await searchParams;
 
   const session = await getSession();

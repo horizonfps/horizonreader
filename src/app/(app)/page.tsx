@@ -68,7 +68,7 @@ export default async function HomePage() {
     getHistory(userId),
     getFavorites(userId),
     getHomeSections().catch(() => null),
-    getHorizonPicks(userId),
+    getHorizonPicks(),
   ]);
 
   const popular = sections?.popular;

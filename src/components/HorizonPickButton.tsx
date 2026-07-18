@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
+import { ThumbsUp } from "lucide-react";
 
 // Admin-only toggle pinning a work into the "Horizon Recomenda" home section.
 export default function HorizonPickButton({
@@ -44,7 +44,7 @@ export default function HorizonPickButton({
           : "border border-border bg-surface text-text hover:bg-elevated"
       }`}
     >
-      <Sparkles className={`h-4 w-4 ${picked ? "fill-current" : ""}`} />
+      <ThumbsUp className={`h-4 w-4 ${picked ? "fill-current" : ""}`} />
       {picked ? "No Horizon Recomenda" : "Horizon Recomenda"}
     </button>
   );

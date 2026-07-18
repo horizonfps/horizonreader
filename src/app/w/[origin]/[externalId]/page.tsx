@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { resolveWorkFromRef } from "@/lib/backbone/resolve";
+import NotFoundView from "@/components/NotFoundView";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,14 @@ export default async function RefResolverPage({
 
   // redirect throws internally; never wrap it in try/catch.
   if (resolved?.slug) redirect("/work/" + resolved.slug);
-  redirect("/?error=notfound");
+  return (
+    <div className="min-h-dvh bg-bg">
+      <main className="mx-auto max-w-app px-4 pb-24 pt-3">
+        <NotFoundView
+          title="Obra indisponível"
+          message="Não conseguimos carregar esta obra agora. Ela pode ter sido removida da fonte."
+        />
+      </main>
+    </div>
+  );
 }

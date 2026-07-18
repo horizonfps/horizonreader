@@ -56,7 +56,15 @@ export function matchKeys(titles: string[]): string[] {
   return [...keys];
 }
 
+// Slugs stay ASCII: non-Latin titles would otherwise produce percent-encoded
+// URLs whose params never match the stored slug.
 export function slugify(title: string, salt: string | number = ""): string {
-  const base = norm(title).replace(/\s+/g, "-").slice(0, 60) || "work";
+  const base =
+    norm(title)
+      .replace(/[^a-z0-9\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 60)
+      .replace(/-+$/, "") || "work";
   return salt ? `${base}-${salt}` : base;
 }

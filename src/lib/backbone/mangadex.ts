@@ -101,12 +101,38 @@ function coverUrl(m: MdxManga): string | null {
   return file ? `${COVERS}/${m.id}/${file}.256.jpg` : null;
 }
 
-// Prefer the English title (title.en, else an en alt-title) so display and scan
-// searches use English, not the romaji/CJK canonical.
+const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
+
+function firstRomanized(o?: Record<string, string>): string | null {
+  if (!o) return null;
+  for (const [k, v] of Object.entries(o)) if (k.endsWith("-ro") && v) return v;
+  return null;
+}
+
+function firstLatin(o?: Record<string, string>): string | null {
+  if (!o) return null;
+  for (const v of Object.values(o)) if (v && !CJK.test(v)) return v;
+  return null;
+}
+
+// Display/search title preference: English, then romanized, then any Latin-script
+// title, so CJK canonicals never surface in the UI.
 function englishTitle(a: MdxManga["attributes"]): string | null {
   if (!a) return null;
   if (a.title?.en) return a.title.en;
   for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
+  let ro = firstRomanized(a.title);
+  for (const alt of a.altTitles ?? []) {
+    if (ro) break;
+    ro = firstRomanized(alt);
+  }
+  if (ro) return ro;
+  const latin = firstLatin(a.title);
+  if (latin) return latin;
+  for (const alt of a.altTitles ?? []) {
+    const v = firstLatin(alt);
+    if (v) return v;
+  }
   return null;
 }
 
