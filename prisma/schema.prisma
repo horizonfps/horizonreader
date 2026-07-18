@@ -64,11 +64,20 @@ model Work {
   favorites     Favorite[]
   progress      Progress[]
   history       ReadingHistory[]
+  horizonPick   HorizonPick?
 
   @@unique([origin, externalId])
   @@index([normalizedKey])
   @@index([type])
   @@index([status])
+}
+
+// Admin-curated entries pinned at the top of the "Horizon Recomenda" section.
+model HorizonPick {
+  id        Int      @id @default(autoincrement())
+  workId    Int      @unique
+  createdAt DateTime @default(now())
+  work      Work     @relation(fields: [workId], references: [id], onDelete: Cascade)
 }
 
 // Binds a canonical Work to one scan (Suwayomi source-manga or native scraper).

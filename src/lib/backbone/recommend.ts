@@ -1,12 +1,13 @@
-// "Horizon Recomenda" assembly: top-rated MangaDex picks biased toward the
-// user's favorite genres, hiding titles already in their library. Server-side only.
+// "Horizon Recomenda" assembly: admin-curated picks pinned first, then
+// top-rated MangaDex picks biased toward the user's favorite genres, hiding
+// titles already in their library. Server-side only.
 
 import { prisma } from "@/lib/db";
 import { listMangaDex } from "@/lib/backbone/mangadex";
 import { resolveGenreTag } from "@/lib/backbone/tags";
 import { isBlocked } from "@/lib/backbone/filter";
 import { backboneToCard } from "@/lib/cards";
-import type { SectionItem } from "@/lib/backbone/types";
+import type { SectionItem, WorkStatus, WorkType } from "@/lib/backbone/types";
 
 const CAP = 30;
 const TTL = 60 * 60 * 1000;
@@ -25,8 +26,43 @@ function parseGenres(json?: string | null): string[] {
   }
 }
 
+function coerceType(t?: string | null): WorkType | null {
+  return t === "manga" || t === "manhwa" || t === "manhua" || t === "other" ? t : null;
+}
+function coerceStatus(s?: string | null): WorkStatus | null {
+  return s === "ongoing" || s === "completed" || s === "hiatus" || s === "cancelled" || s === "unknown"
+    ? s
+    : null;
+}
+
+// Curated picks always show, newest first, linking straight to the local work.
+async function getCuratedPicks(): Promise<SectionItem[]> {
+  const picks = await prisma.horizonPick.findMany({
+    orderBy: { createdAt: "desc" },
+    take: CAP,
+    include: { work: true },
+  });
+  return picks
+    .filter((p) => p.work)
+    .map((p) => ({
+      origin: p.work.origin === "comick" ? ("comick" as const) : ("mangadex" as const),
+      externalId: p.work.externalId,
+      slug: null,
+      localSlug: p.work.slug,
+      title: p.work.title,
+      coverUrl: p.work.coverUrl,
+      type: coerceType(p.work.type),
+      status: coerceStatus(p.work.status),
+      rating: p.work.rating,
+      chapterCount: null,
+      genres: [],
+      contentRating: p.work.contentRating,
+    }));
+}
+
 export async function getHorizonPicks(userId: number): Promise<SectionItem[]> {
   try {
+    const curated = await getCuratedPicks().catch(() => [] as SectionItem[]);
     const favs = await prisma.favorite.findMany({
       where: { userId },
       select: { work: { select: { origin: true, externalId: true, genres: true } } },
@@ -68,7 +104,13 @@ export async function getHorizonPicks(userId: number): Promise<SectionItem[]> {
       if (items.length) cache.set(key, { data: items, at: now });
     }
 
-    return items.filter((it) => !owned.has(`${it.origin}:${it.externalId}`)).slice(0, CAP);
+    const curatedKeys = new Set(curated.map((it) => `${it.origin}:${it.externalId}`));
+    const algo = items.filter(
+      (it) =>
+        !owned.has(`${it.origin}:${it.externalId}`) &&
+        !curatedKeys.has(`${it.origin}:${it.externalId}`),
+    );
+    return [...curated, ...algo].slice(0, CAP);
   } catch {
     return [];
   }

@@ -25,11 +25,13 @@ export type BackboneWork = {
   muId?: string | null; // MangaUpdates id from MangaDex links.mu, if present
 };
 
-// A lighter entry for the home sections / grids.
+// A lighter entry for the home sections / grids. slug is the origin's own
+// slug; localSlug is a known local Work slug that skips the ref resolver.
 export type SectionItem = {
   origin: "mangadex" | "comick";
   externalId: string;
   slug?: string | null;
+  localSlug?: string | null;
   title: string;
   coverUrl?: string | null;
   type?: WorkType | null;

@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useCallback } from "react";
 import type { ComponentProps } from "react";
 
-// Warms the expensive source-resolution path before the click: fetching the
-// href follows the redirect into /work/[slug], populating SourceLink rows and
-// Suwayomi caches so the real click hits the fast cached path. Cards warm as
-// they scroll into view; hover/touch intent jumps the queue.
+// Warms the expensive source-resolution path before the click via /api/warm,
+// which canonicalizes the work and queues source resolution server-side in a
+// throttled background lane. Cards warm as they scroll into view; hover/touch
+// intent jumps the queue.
 const warmed = new Set<string>();
 const queue: string[] = [];
 let inFlight = 0;
@@ -21,8 +21,11 @@ function pump() {
   while (inFlight < MAX_INFLIGHT && queue.length) {
     const href = queue.shift()!;
     inFlight += 1;
-    fetch(href, { redirect: "follow" })
-      .then((r) => r.text())
+    fetch("/api/warm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ href }),
+    })
       .catch(() => {})
       .finally(() => {
         inFlight -= 1;

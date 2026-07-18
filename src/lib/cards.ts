@@ -32,12 +32,15 @@ export function coverProxy(url?: string | null): string {
 
 // A card links to the ref resolver, which canonicalizes to a local Work then
 // redirects to /work/[slug]. Title + cover ride along for Comick canonicalization.
+// Items with a known local slug skip the resolver entirely.
 export function workHref(item: {
   origin: string;
   externalId: string;
+  localSlug?: string | null;
   title?: string | null;
   coverUrl?: string | null;
 }): string {
+  if (item.localSlug) return `/work/${item.localSlug}`;
   const p = new URLSearchParams();
   if (item.title) p.set("t", item.title);
   if (item.coverUrl) p.set("c", item.coverUrl);

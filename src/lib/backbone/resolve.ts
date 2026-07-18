@@ -349,7 +349,57 @@ async function processScraper(
   }
 }
 
-export async function resolveSourcesForWork(
+// Coalesces concurrent resolves per work so a click reuses a warm already in
+// flight instead of starting a duplicate full source sweep.
+const inFlightResolves = new Map<number, Promise<void>>();
+
+export function resolveSourcesForWork(
+  workId: number,
+  opts?: { force?: boolean },
+): Promise<void> {
+  const existing = inFlightResolves.get(workId);
+  if (existing && !opts?.force) return existing;
+  const p = doResolveSourcesForWork(workId, opts).finally(() => {
+    if (inFlightResolves.get(workId) === p) inFlightResolves.delete(workId);
+  });
+  inFlightResolves.set(workId, p);
+  return p;
+}
+
+// Background lane for prefetch warms: low concurrency plus a per-work cooldown
+// so viewport warming never saturates Suwayomi/DB and slows real clicks.
+const BG_CONCURRENCY = 2;
+const BG_COOLDOWN_MS = 3_600_000;
+const bgQueue: number[] = [];
+const bgQueued = new Set<number>();
+const bgDoneAt = new Map<number, number>();
+let bgActive = 0;
+
+export function queueSourceResolve(workId: number): void {
+  const done = bgDoneAt.get(workId);
+  if (done && Date.now() - done < BG_COOLDOWN_MS) return;
+  if (bgQueued.has(workId) || inFlightResolves.has(workId)) return;
+  bgQueued.add(workId);
+  bgQueue.push(workId);
+  pumpBackground();
+}
+
+function pumpBackground() {
+  while (bgActive < BG_CONCURRENCY && bgQueue.length) {
+    const workId = bgQueue.shift()!;
+    bgQueued.delete(workId);
+    bgActive += 1;
+    bgDoneAt.set(workId, Date.now());
+    resolveSourcesForWork(workId)
+      .catch(() => {})
+      .finally(() => {
+        bgActive -= 1;
+        pumpBackground();
+      });
+  }
+}
+
+async function doResolveSourcesForWork(
   workId: number,
   opts?: { force?: boolean },
 ): Promise<void> {

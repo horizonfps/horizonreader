@@ -11,6 +11,7 @@ import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
+import HorizonPickButton from "@/components/HorizonPickButton";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,13 @@ export default async function WorkPage({
       )?.status ?? null
     : null;
 
+  const isAdmin = session?.isAdmin ?? false;
+  const isPicked = isAdmin
+    ? !!(await prisma.horizonPick
+        .findUnique({ where: { workId: work.id }, select: { id: true } })
+        .catch(() => null))
+    : false;
+
   const cover = coverProxy(work.coverUrl);
   const genres = parseGenres(work.genres);
   const meta = [cap(work.type), cap(work.status), work.year].filter(Boolean).join(" · ");
@@ -88,8 +96,9 @@ export default async function WorkPage({
           <h1 className="text-lg font-semibold leading-tight">{work.title}</h1>
           {work.author ? <p className="text-sm text-muted">{work.author}</p> : null}
           {meta ? <p className="text-xs text-muted">{meta}</p> : null}
-          <div className="pt-1">
+          <div className="flex flex-wrap gap-2 pt-1">
             <FavoriteButton workId={work.id} initialStatus={favStatus} />
+            {isAdmin ? <HorizonPickButton workId={work.id} initialPicked={isPicked} /> : null}
           </div>
         </div>
       </header>
