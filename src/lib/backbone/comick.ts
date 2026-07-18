@@ -88,10 +88,16 @@ function comickGenres(item: any): string[] {
   return out;
 }
 
+const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
+
+// Prefer a Latin-script title so CJK canonicals never surface in the UI.
 function pickTitle(item: any, alt: string[]): string {
-  if (item?.title) return item.title;
   const md = Array.isArray(item?.md_titles) ? item.md_titles : [];
-  return md.find((t: any) => t?.is_default)?.title || alt[0] || "";
+  const main = item?.title || md.find((t: any) => t?.is_default)?.title || alt[0] || "";
+  if (main && !CJK.test(main)) return main;
+  const en = md.find((t: any) => t?.lang === "en" && t?.title && !CJK.test(t.title))?.title;
+  if (en) return en;
+  return alt.find((t) => !CJK.test(t)) || main;
 }
 
 function toSectionItem(item: any): SectionItem {
