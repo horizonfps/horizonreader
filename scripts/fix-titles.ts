@@ -10,9 +10,14 @@ const prisma = new PrismaClient();
 
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 const BAD_SLUG = /[^a-z0-9-]/;
+// MangaDex rejects requests missing this browser-like header set.
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) horizonreader",
   Accept: "application/json",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Sec-Fetch-Dest": "empty",
+  "Sec-Fetch-Mode": "cors",
+  "Sec-Fetch-Site": "same-site",
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -43,7 +48,7 @@ function pickLatinTitle(a: Attrs): string | null {
   if (a.title?.en) return a.title.en;
   for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
   const romanized = (o?: Record<string, string>) => {
-    for (const [k, v] of Object.entries(o ?? {})) if (k.endsWith("-ro") && v) return v;
+    for (const [k, v] of Object.entries(o ?? {})) if (k.endsWith("-ro") && v && !CJK.test(v)) return v;
     return null;
   };
   const latin = (o?: Record<string, string>) => {
@@ -108,7 +113,8 @@ async function main() {
     }
 
     let slug = w.slug;
-    if (BAD_SLUG.test(slug)) {
+    const placeholder = title !== w.title && slug.startsWith("work-");
+    if (BAD_SLUG.test(slug) || placeholder) {
       slug = await uniqueSlug(slugify(title, shortHash(w.externalId)), w.id);
     }
 

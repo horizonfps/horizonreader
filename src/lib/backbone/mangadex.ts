@@ -103,9 +103,10 @@ function coverUrl(m: MdxManga): string | null {
 
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 
+// Some entries mislabel a CJK value as "-ro", so the value is checked too.
 function firstRomanized(o?: Record<string, string>): string | null {
   if (!o) return null;
-  for (const [k, v] of Object.entries(o)) if (k.endsWith("-ro") && v) return v;
+  for (const [k, v] of Object.entries(o)) if (k.endsWith("-ro") && v && !CJK.test(v)) return v;
   return null;
 }
 
