@@ -7,6 +7,12 @@ import { prisma } from "@/lib/db";
 import { getWorkWithLinks, resolveSourcesForWork } from "@/lib/backbone/resolve";
 import { getMangaEnsured, getChapters } from "@/lib/suwayomi";
 import { getNativeChapters } from "@/lib/scrapers/native";
+import {
+  chapterCacheKey,
+  getCachedChapters,
+  setCachedChapters,
+  bustChapters,
+} from "@/lib/chapterCache";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
@@ -172,6 +178,10 @@ async function SourcesAndChapters({
   // Force a re-resolve, then strip the param (redirect throws; keep it unwrapped).
   if (refresh) {
     await resolveSourcesForWork(workId, { force: true });
+    const freshLinks = await prisma.sourceLink
+      .findMany({ where: { workId }, select: { id: true, kind: true, sourceMangaId: true } })
+      .catch(() => []);
+    bustChapters(freshLinks.map(chapterCacheKey));
     redirect(`/work/${slug}${src ? `?src=${src}` : ""}`);
   }
 
@@ -207,11 +217,19 @@ async function SourcesAndChapters({
     uploadDate?: string | null;
   };
   let chapters: ChapterView[] = [];
-  if (selected?.kind === "scraper") {
-    chapters = await getNativeChapters(selected.id).catch(() => []);
-  } else if (selected) {
-    await getMangaEnsured(selected.sourceMangaId).catch(() => null);
-    chapters = await getChapters(selected.sourceMangaId).catch(() => []);
+  if (selected) {
+    const key = chapterCacheKey(selected);
+    chapters = getCachedChapters<ChapterView[]>(key) ?? [];
+    if (!chapters.length) {
+      if (selected.kind === "scraper") {
+        chapters = await getNativeChapters(selected.id).catch(() => []);
+      } else {
+        // A link that already carries chapters was initialized by the sync.
+        if (!selected.chapterCount) await getMangaEnsured(selected.sourceMangaId).catch(() => null);
+        chapters = await getChapters(selected.sourceMangaId).catch(() => []);
+      }
+      if (chapters.length) setCachedChapters(key, chapters);
+    }
   }
 
   const progressList =

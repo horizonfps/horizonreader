@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { backboneToCard } from "@/lib/cards";
 import { isBlocked } from "@/lib/backbone/filter";
 import { searchMangaDex } from "@/lib/backbone/mangadex";
+import { attachLocalSlugs } from "@/lib/backbone/localslugs";
 
 export const runtime = "nodejs";
 
@@ -18,6 +19,7 @@ export async function GET(req: Request) {
     const items = works
       .map(backboneToCard)
       .filter((c) => !isBlocked({ genres: c.genres, contentRating: c.contentRating }));
+    await attachLocalSlugs([items]);
     return NextResponse.json({ items });
   } catch {
     return NextResponse.json({ items: [] });

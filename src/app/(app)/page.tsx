@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { getHomeSections } from "@/lib/backbone/sections";
 import { getHorizonPicks } from "@/lib/backbone/recommend";
+import { attachLocalSlugs } from "@/lib/backbone/localslugs";
 import WindowTabs from "@/components/WindowTabs";
 import SectionRow from "@/components/SectionRow";
 import CardRow from "@/components/CardRow";
@@ -73,6 +74,13 @@ export default async function HomePage() {
   const popular = sections?.popular;
   const completed = sections?.completed;
   const bestNew = sections?.bestNew ?? [];
+
+  await attachLocalSlugs([
+    horizonPicks,
+    ...(popular ? [popular["30d"], popular["6m"], popular["12m"], popular.all] : []),
+    ...(completed ? [completed["7d"], completed["30d"], completed["12m"]] : []),
+    bestNew,
+  ]);
 
   return (
     <div className="space-y-6">

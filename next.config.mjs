@@ -6,6 +6,9 @@ const nextConfig = {
   // optimizer is bypassed on purpose.
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },
+  // Client router cache: revisits and back/forward within the window render
+  // instantly from the client, matching SPA-style navigation.
+  experimental: { staleTimes: { dynamic: 30, static: 180 } },
   async headers() {
     return [
       {
