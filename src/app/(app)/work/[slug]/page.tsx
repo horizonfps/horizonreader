@@ -18,10 +18,14 @@ import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
+import ResolvingSources from "@/components/ResolvingSources";
 
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 86_400_000;
+// How long a first-time source resolve may block the request before the page
+// paints; the resolve keeps running in the background past this budget.
+const RESOLVE_BUDGET_MS = 5_000;
 
 function cap(s?: string | null): string {
   if (!s) return "";
@@ -198,11 +202,15 @@ async function SourcesAndChapters({
       (l) => l.lastSyncedAt && Date.now() - new Date(l.lastSyncedAt).getTime() < DAY_MS,
     );
   if (stale) {
+    const resolving = resolveSourcesForWork(workId).catch(() => {});
     if (data?.links.length) {
       // Existing sources still render; refresh them off the request path.
-      void resolveSourcesForWork(workId).catch(() => {});
+      void resolving;
     } else {
-      await resolveSourcesForWork(workId);
+      // First open: block only briefly so the page paints instead of hanging on
+      // dead sources' timeouts. The resolve finishes in the background (coalesced)
+      // and <ResolvingSources> auto-refreshes until chapters land.
+      await Promise.race([resolving, new Promise((r) => setTimeout(r, RESOLVE_BUDGET_MS))]);
       data = await getWorkWithLinks(workId);
     }
   }
@@ -293,9 +301,7 @@ async function SourcesAndChapters({
             })}
           </div>
         ) : (
-          <p className="text-sm text-muted">
-            Nenhuma fonte encontrada ainda. Toque em Atualizar fontes para procurar.
-          </p>
+          <ResolvingSources />
         )}
       </section>
 
