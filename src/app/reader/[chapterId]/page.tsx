@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { fetchChapterPages, getChapters, proxied, pageUrl } from "@/lib/suwayomi";
 import { getScraper } from "@/lib/scrapers";
 import { NATIVE_OFFSET, isNativeChapterId, proxyScraperImage } from "@/lib/scrapers/native";
+import { dedupeByNumber, scanlatorKey } from "@/lib/chapters";
 import Reader from "@/components/Reader";
 
 export const dynamic = "force-dynamic";
@@ -36,11 +37,19 @@ async function loadNative(chapterId: number): Promise<ReaderData | null> {
   const pages = await scraper.pages(row.chapterKey).catch(() => []);
   if (!pages.length) return null;
 
-  const siblings = await prisma.scrapedChapter.findMany({
+  const siblingRows = await prisma.scrapedChapter.findMany({
     where: { sourceLinkId: row.sourceLinkId },
-    orderBy: { number: "asc" },
-    select: { id: true },
+    select: { id: true, number: true, uploadDate: true },
   });
+  const siblings = dedupeByNumber(
+    siblingRows.map((s) => ({
+      id: s.id,
+      name: "",
+      chapterNumber: s.number,
+      uploadDate: s.uploadDate ? String(s.uploadDate.getTime()) : null,
+    })),
+    rowId,
+  ).sort((a, b) => a.chapterNumber - b.chapterNumber);
   const idx = siblings.findIndex((s) => s.id === rowId);
   const prevId = idx > 0 ? NATIVE_OFFSET + siblings[idx - 1].id : null;
   const nextId = idx >= 0 && idx < siblings.length - 1 ? NATIVE_OFFSET + siblings[idx + 1].id : null;
@@ -68,8 +77,14 @@ async function loadSuwayomi(chapterId: number): Promise<ReaderData | null> {
       ? pages.map((p) => proxied(p))
       : Array.from({ length: pageCount }, (_, i) => pageUrl(mangaId, sourceOrder, i));
 
+  // Navigate within the current chapter's scanlator only, so next/prev advances
+  // by number instead of jumping to another scan's upload of the same chapter.
   const chapters = await getChapters(mangaId).catch(() => []);
-  const ordered = [...chapters].sort((a, b) => a.chapterNumber - b.chapterNumber);
+  const current = chapters.find((c) => c.id === chapterId);
+  const pool = current
+    ? chapters.filter((c) => scanlatorKey(c.scanlator) === scanlatorKey(current.scanlator))
+    : chapters;
+  const ordered = dedupeByNumber(pool, chapterId).sort((a, b) => a.chapterNumber - b.chapterNumber);
   const idx = ordered.findIndex((c) => c.id === chapterId);
 
   const link = await prisma.sourceLink.findFirst({

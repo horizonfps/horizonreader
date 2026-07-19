@@ -3,7 +3,7 @@
 
 import { prisma } from "@/lib/db";
 import type { BackboneWork } from "@/lib/backbone/types";
-import { norm, matchKeys, slugify, tokenSetRatio } from "@/lib/backbone/normalize";
+import { norm, matchKeys, slugify, titleSimilarity } from "@/lib/backbone/normalize";
 import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
 import {
@@ -29,7 +29,12 @@ const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
 const SOURCE_TIMEOUT = 8_000;
 const SCRAPER_TIMEOUT = 90_000;
-const MATCH_THRESHOLD = 0.88;
+// Combined token_set + token_sort floor. Lower than the old token_set-only 0.88
+// because the new metric is stricter (a subset title no longer scores 1.0).
+const MATCH_THRESHOLD = 0.8;
+// Merging two backbone works into one is worse than duplicating, so hold it to a
+// near-identical primary title.
+const MERGE_THRESHOLD = 0.85;
 
 // Scan-source languages to search. Suwayomi reports Brazilian Portuguese as
 // "pt-BR" (some sources as "pt"); normalize both.
@@ -143,14 +148,16 @@ export async function upsertWork(bw: BackboneWork): Promise<{ id: number; create
     return { id: existing.id, created: false };
   }
 
-  // 2) exact normalized-key pre-filter (indexed) -> merge onto the hit.
+  // 2) exact normalized-key pre-filter (indexed), then confirm the primary titles
+  // are near-identical before merging. The pre-filter can hit on a shared generic
+  // alt title, which must not glue two different works together.
   const preFilter = await prisma.work.findMany({
     where: { normalizedKey: { in: keys } },
-    select: { id: true, altTitles: true, matchKeys: true },
-    take: 1,
+    select: { id: true, title: true, altTitles: true, matchKeys: true },
+    take: 5,
   });
-  if (preFilter.length) {
-    const hit = preFilter[0];
+  const hit = preFilter.find((h) => titleSimilarity(bw.title, h.title) >= MERGE_THRESHOLD);
+  if (hit) {
     await prisma.work.update({
       where: { id: hit.id },
       data: {
@@ -256,7 +263,7 @@ async function searchAndMatch(
   let matched = false;
   for (const result of (mangas ?? []).slice(0, 5)) {
     let best = 0;
-    for (const t of titles) best = Math.max(best, tokenSetRatio(result.title, t));
+    for (const t of titles) best = Math.max(best, titleSimilarity(result.title, t));
     if (best >= MATCH_THRESHOLD) {
       await syncMatch(source, workId, result);
       matched = true;
@@ -295,7 +302,7 @@ async function processScraper(
       const results = await scraper.search(query).catch(() => []);
       for (const r of results.slice(0, 5)) {
         let best = 0;
-        for (const t of titles) best = Math.max(best, tokenSetRatio(r.title, t));
+        for (const t of titles) best = Math.max(best, titleSimilarity(r.title, t));
         if (best >= MATCH_THRESHOLD) {
           match = r;
           break;
@@ -570,15 +577,15 @@ export async function resolveWorkFromRef(
         let bestScore = 0;
         for (const c of cands) {
           const s = Math.max(
-            tokenSetRatio(title, c.title),
-            ...c.altTitles.map((t) => tokenSetRatio(title, t)),
+            titleSimilarity(title, c.title),
+            ...c.altTitles.map((t) => titleSimilarity(title, t)),
           );
           if (s > bestScore) {
             bestScore = s;
             best = c;
           }
         }
-        if (best && bestScore >= 0.85) bw = best;
+        if (best && bestScore >= MATCH_THRESHOLD) bw = best;
       }
       if (!bw) {
         bw = {

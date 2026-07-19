@@ -13,6 +13,7 @@ import {
   setCachedChapters,
   bustChapters,
 } from "@/lib/chapterCache";
+import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
@@ -63,7 +64,7 @@ export default async function WorkPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ src?: string; refresh?: string }>;
+  searchParams: Promise<{ src?: string; scan?: string; refresh?: string }>;
 }) {
   // Route params arrive percent-encoded; legacy non-ASCII slugs need decoding.
   const { slug: rawSlug } = await params;
@@ -138,6 +139,7 @@ export default async function WorkPage({
           workId={work.id}
           uid={session?.uid ?? null}
           src={sp.src}
+          scan={sp.scan}
           refresh={sp.refresh}
         />
       </Suspense>
@@ -176,12 +178,14 @@ async function SourcesAndChapters({
   workId,
   uid,
   src,
+  scan,
   refresh,
 }: {
   slug: string;
   workId: number;
   uid: number | null;
   src?: string;
+  scan?: string;
   refresh?: string;
 }) {
   // Force a re-resolve, then strip the param (redirect throws; keep it unwrapped).
@@ -245,6 +249,24 @@ async function SourcesAndChapters({
     }
   }
 
+  // Split the source's chapters by scanlator so a single scan group reads clean.
+  // ?scan picks a group; else the largest. dedupeByNumber drops re-uploads so
+  // the list (and the reader's next/prev) never repeats a number.
+  const groups = selected ? groupByScanlator(chapters) : [];
+  let wantScan: string | null = null;
+  if (scan != null) {
+    try {
+      wantScan = decodeURIComponent(scan);
+    } catch {
+      wantScan = scan;
+    }
+  }
+  const activeGroup =
+    (wantScan != null ? groups.find((g) => g.key === wantScan) : undefined) ?? groups[0];
+  const visible: ChapterView[] = activeGroup
+    ? dedupeByNumber(activeGroup.chapters).sort((a, b) => b.chapterNumber - a.chapterNumber)
+    : [];
+
   const progressList =
     uid && selected
       ? await prisma.progress
@@ -252,14 +274,14 @@ async function SourcesAndChapters({
           .catch(() => [])
       : [];
 
-  const chapterIds = new Set(chapters.map((c) => c.id));
+  const chapterIds = new Set(visible.map((c) => c.id));
   const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
 
   // Reading entry point: resume the in-progress chapter, else first unread.
-  const chaptersAsc = [...chapters].reverse();
+  const chaptersAsc = [...visible].reverse();
   let startId: number | null = null;
   let startLabel = "Começar a ler";
-  if (chapters.length) {
+  if (visible.length) {
     const inProgress = progressList
       .filter((p) => !p.read && p.lastPageRead > 0)
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
@@ -305,9 +327,33 @@ async function SourcesAndChapters({
         )}
       </section>
 
+      {groups.length > 1 && selected ? (
+        <section>
+          <h2 className="mb-2 text-sm text-muted">Grupos de scan</h2>
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
+            {groups.map((g) => {
+              const active = activeGroup?.key === g.key;
+              return (
+                <Link
+                  key={g.key || "—"}
+                  href={`/work/${slug}?src=${selected.id}&scan=${encodeURIComponent(g.key)}`}
+                  scroll={false}
+                  className={`flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs ${
+                    active ? "bg-accent text-on-accent" : "bg-elevated text-text"
+                  }`}
+                >
+                  <span className="max-w-[10rem] truncate">{g.key || "Sem grupo"}</span>
+                  <span className={active ? "text-on-accent" : "text-muted"}>{g.count}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <section>
         <h2 className="mb-2 text-sm text-muted">
-          Capítulos{chapters.length ? ` (${chapters.length})` : ""}
+          Capítulos{visible.length ? ` (${visible.length})` : ""}
         </h2>
 
         {startId ? (
@@ -320,7 +366,7 @@ async function SourcesAndChapters({
           </Link>
         ) : null}
 
-        {chapters.length === 0 ? (
+        {visible.length === 0 ? (
           <p className="text-sm text-muted">
             {selected
               ? links.length > 1
@@ -330,9 +376,9 @@ async function SourcesAndChapters({
           </p>
         ) : (
           <ul className="divide-y divide-border">
-            {chapters.map((c) => {
+            {visible.map((c) => {
               const read = readSet.has(c.id);
-              const sub = [c.scanlator, fmtDate(c.uploadDate)].filter(Boolean).join(" · ");
+              const sub = fmtDate(c.uploadDate);
               return (
                 <li key={c.id}>
                   <Link href={`/reader/${c.id}`} className="flex items-center gap-3 py-2.5">

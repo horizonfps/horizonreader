@@ -46,6 +46,34 @@ export function bestScore(names: string[], titles: string[]): number {
   return best;
 }
 
+// token_sort_ratio: sort both token bags then compare the full strings. Unlike
+// token_set, extra tokens on one side lower the score, so a short title is not a
+// perfect match for a longer one that merely contains it.
+export function tokenSortRatio(a: string, b: string): number {
+  const sa = norm(a).split(" ").filter(Boolean).sort().join(" ");
+  const sb = norm(b).split(" ").filter(Boolean).sort().join(" ");
+  return ratio(sa, sb);
+}
+
+// Match decision for cross-source/cross-language titles. token_set alone treats
+// a subset title as a 1.0 match ("Veteran Player" vs "A Veteran Player is Needed
+// in the Apocalypse"), which glues different works together; requiring token_sort
+// too demands real full-string overlap and kills that false positive.
+export function titleSimilarity(a: string, b: string): number {
+  return Math.min(tokenSetRatio(a, b), tokenSortRatio(a, b));
+}
+
+// Best titleSimilarity across every (name, title) pair.
+export function bestTitleSimilarity(names: string[], titles: string[]): number {
+  let best = 0;
+  for (const n of names)
+    for (const t of titles) {
+      best = Math.max(best, titleSimilarity(n, t));
+      if (best >= 1) return best;
+    }
+  return best;
+}
+
 // Distinct normalized keys for a set of titles (stored on Work for exact lookup).
 export function matchKeys(titles: string[]): string[] {
   const keys = new Set<string>();

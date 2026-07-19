@@ -11,6 +11,7 @@
     "db:push": "prisma db push",
     "user": "node --env-file-if-exists=.env --experimental-strip-types scripts/user.ts",
     "fix-titles": "node --env-file-if-exists=.env --experimental-strip-types scripts/fix-titles.ts",
+    "fix-sources": "node --env-file-if-exists=.env --experimental-strip-types scripts/fix-sources.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
