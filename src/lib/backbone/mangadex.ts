@@ -19,8 +19,10 @@ const HEADERS: Record<string, string> = {
   "Sec-Fetch-Site": "same-site",
 };
 
-// erotica/pornographic are intentionally excluded (no NSFW discovery).
+// Discovery surfaces stay safe/suggestive; search also accepts erotica so
+// mature seinen is findable. Pornographic is never requested.
 const DEFAULT_RATINGS = ["safe", "suggestive"];
+const SEARCH_RATINGS = [...DEFAULT_RATINGS, "erotica"];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -178,7 +180,7 @@ export async function searchMangaDex(title: string, limit = 8): Promise<Backbone
   qs.set("title", title);
   qs.set("limit", String(limit));
   qs.append("includes[]", "cover_art");
-  appendAll(qs, "contentRating[]", DEFAULT_RATINGS);
+  appendAll(qs, "contentRating[]", SEARCH_RATINGS);
   appendAll(qs, "excludedTags[]", BLOCKED_MDX_TAGS);
   qs.set("order[relevance]", "desc");
   const d = await getJson<{ data?: MdxManga[] }>(`/manga?${qs.toString()}`);

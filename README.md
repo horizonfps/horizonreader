@@ -19,8 +19,9 @@ own login, per-user library, and reading progress.
 - **English + Brazilian Portuguese** sources out of the box (Keiyoushi extension repo,
   plus a few native pt-BR scrapers), with MangaDex/Comick powering search, covers,
   ratings, and metadata.
-- **Content filter built in**: pornographic works (hentai/erotica/smut) and BL/GL
-  titles are excluded from every discovery surface.
+- **Content filter built in**: pornographic works (hentai/smut) and BL/GL titles
+  are excluded from every discovery surface. Erotica-rated seinen (think Berserk)
+  stays searchable; home/browse stick to safe/suggestive.
 - **Your own gatekeeping**: no sign-up page, no "forgot password". Accounts are
   created by CLI, period.
 - **Privacy by design**: the browser only ever talks to the app. Covers and pages are

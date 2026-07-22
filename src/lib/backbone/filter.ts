@@ -1,6 +1,7 @@
-// Content policy: hide pornographic (hentai/erotica) and BL/GL/LGBT works from
-// every discovery surface. +18 by gore/violence stays visible. Pure + isomorphic
-// (no server-only imports) so client bundles and API routes can share it.
+// Content policy: hide pornographic (hentai/smut) and BL/GL/LGBT works from
+// every discovery surface. "erotica"-rated seinen (Berserk-tier nudity/gore)
+// and +18 by violence stay visible. Pure + isomorphic (no server-only imports)
+// so client bundles and API routes can share it.
 
 // MangaDex genre tag UUIDs to exclude at the source query.
 export const BLOCKED_MDX_TAGS = [
@@ -44,10 +45,10 @@ export function isBlockedGenres(genres?: string[] | null): boolean {
   return false;
 }
 
-// Only explicit sexual ratings are blocked; "safe"/"suggestive" pass.
+// Only pornographic ratings are blocked; "erotica" (mature seinen) passes.
 export function isBlockedRating(rating?: string | null): boolean {
   if (!rating) return false;
-  return /porn|erotic|hentai|adult|smut|nsfw|18\+/i.test(rating);
+  return /porn|hentai|adult|smut|nsfw|18\+/i.test(rating);
 }
 
 export function isBlocked(input: {
