@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { backboneToCard } from "@/lib/cards";
-import { isBlocked } from "@/lib/backbone/filter";
-import { searchMangaDex } from "@/lib/backbone/mangadex";
-import { attachLocalSlugs } from "@/lib/backbone/localslugs";
+import { searchWorks } from "@/lib/backbone/search";
 
 export const runtime = "nodejs";
 
@@ -15,11 +12,7 @@ export async function GET(req: Request) {
   if (!q) return NextResponse.json({ items: [] });
 
   try {
-    const works = await searchMangaDex(q, 24);
-    const items = works
-      .map(backboneToCard)
-      .filter((c) => !isBlocked({ genres: c.genres, contentRating: c.contentRating }));
-    await attachLocalSlugs([items]);
+    const items = await searchWorks(q);
     return NextResponse.json({ items });
   } catch {
     return NextResponse.json({ items: [] });

@@ -27,7 +27,7 @@ export default function CardRow({
           <PrefetchLink
             key={`${it.href}:${i}`}
             href={it.href}
-            className="flex-[0_0_31%] shrink-0 sm:flex-[0_0_23%]"
+            className="flex-[0_0_31%] shrink-0 sm:flex-[0_0_23%] md:flex-[0_0_18%] lg:flex-[0_0_14%] xl:flex-[0_0_12%]"
           >
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
               {src ? (

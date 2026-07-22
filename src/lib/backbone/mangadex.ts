@@ -38,10 +38,17 @@ function schedule(): Promise<void> {
   return next;
 }
 
+// Hard ceiling per call: a hung MangaDex must not hang search or resolve.
+const FETCH_TIMEOUT_MS = 8_000;
+
 async function getJson<T = unknown>(path: string): Promise<T | null> {
   try {
     await schedule();
-    const res = await fetch(`${BASE}${path}`, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(`${BASE}${path}`, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -116,16 +123,19 @@ function firstLatin(o?: Record<string, string>): string | null {
   return null;
 }
 
-// Display/search title preference: English, then romanized, then any Latin-script
-// title, so CJK canonicals never surface in the UI.
+// Display/search title preference: canonical English, then the canonical
+// romanized title (the name readers actually know), then English alts, then any
+// Latin-script title, so CJK canonicals never surface in the UI.
 function englishTitle(a: MdxManga["attributes"]): string | null {
   if (!a) return null;
   if (a.title?.en) return a.title.en;
+  const canonicalRo = firstRomanized(a.title);
+  if (canonicalRo) return canonicalRo;
   for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
-  let ro = firstRomanized(a.title);
+  let ro: string | null = null;
   for (const alt of a.altTitles ?? []) {
-    if (ro) break;
     ro = firstRomanized(alt);
+    if (ro) break;
   }
   if (ro) return ro;
   const latin = firstLatin(a.title);

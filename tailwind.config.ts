@@ -18,7 +18,7 @@ const config: Config = {
         "on-accent": rgb("--on-accent"),
       },
       maxWidth: {
-        app: "48rem",
+        app: "72rem",
       },
     },
   },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { scraperHosts } from "@/lib/scrapers";
+import { getCachedImage, setCachedImage } from "@/lib/imageCache";
 
 export const runtime = "nodejs";
 
@@ -44,6 +45,18 @@ export async function GET(req: NextRequest) {
     target = BASE + path;
   }
 
+  // Thumbnails are small and hit constantly (library/work grids); pages stream.
+  const cacheable = !ext && path.includes("/thumbnail");
+  if (cacheable) {
+    const hit = getCachedImage(target);
+    if (hit) {
+      return new NextResponse(new Uint8Array(hit.body), {
+        status: 200,
+        headers: { "content-type": hit.contentType, "cache-control": "private, max-age=86400" },
+      });
+    }
+  }
+
   // Never follow redirects: a whitelisted host answering 30x must not steer the
   // server-side fetch to an internal target.
   const upstream = await fetch(target, {
@@ -59,6 +72,12 @@ export async function GET(req: NextRequest) {
   const ct = upstream.headers.get("content-type");
   if (ct) headers.set("content-type", ct);
   headers.set("cache-control", "private, max-age=86400");
+
+  if (cacheable) {
+    const body = new Uint8Array(await upstream.arrayBuffer());
+    setCachedImage(target, body, ct || "application/octet-stream");
+    return new NextResponse(body, { status: 200, headers });
+  }
 
   return new NextResponse(upstream.body, { status: 200, headers });
 }

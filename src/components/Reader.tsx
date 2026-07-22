@@ -238,25 +238,27 @@ export default function Reader({
           onClick={() => setShowUI((v) => !v)}
           className="no-scrollbar h-full w-full overflow-y-auto"
         >
-          {pageUrls.map((url, i) => (
-            <div
-              key={i}
-              data-idx={i}
-              ref={(el) => {
-                wrapRefs.current[i] = el;
-              }}
-              style={{ minHeight: "60vh" }}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={url}
-                alt=""
-                loading="lazy"
-                onLoad={i === initialPage ? settleResume : undefined}
-                className="block w-full select-none"
-              />
-            </div>
-          ))}
+          <div className="mx-auto w-full max-w-3xl">
+            {pageUrls.map((url, i) => (
+              <div
+                key={i}
+                data-idx={i}
+                ref={(el) => {
+                  wrapRefs.current[i] = el;
+                }}
+                style={{ minHeight: "60vh" }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={url}
+                  alt=""
+                  loading={i < 3 ? "eager" : "lazy"}
+                  onLoad={i === initialPage ? settleResume : undefined}
+                  className="block w-full select-none"
+                />
+              </div>
+            ))}
+          </div>
           <div ref={endRef} className="flex flex-col items-center gap-3 py-10">
             {nextChapterId ? (
               <Link href={`/reader/${nextChapterId}`} className="rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-on-accent">
@@ -276,10 +278,12 @@ export default function Reader({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={pageUrls[page]} alt="" className="max-h-full max-w-full select-none object-contain" />
           </div>
-          {page + 1 < total && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={pageUrls[page + 1]} alt="" className="hidden" />
-          )}
+          {[page + 1, page + 2, page - 1]
+            .filter((i) => i >= 0 && i < total)
+            .map((i) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={i} src={pageUrls[i]} alt="" className="hidden" />
+            ))}
         </div>
       )}
 

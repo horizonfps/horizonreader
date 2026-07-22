@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
+import { getCachedImage, setCachedImage } from "@/lib/imageCache";
 
 export const runtime = "nodejs";
+
+// Cover files are content-addressed upstream, so long immutable caching is safe.
+const CACHE_CONTROL = "public, max-age=604800, immutable";
 
 // Exact hosts allowed. Comick also matches the '.comick.pictures' suffix below.
 const ALLOWED_HOSTS = new Set([
@@ -38,6 +42,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "forbidden_host" }, { status: 400 });
   }
 
+  const cacheKey = target.toString();
+  const hit = getCachedImage(cacheKey);
+  if (hit) {
+    return new NextResponse(new Uint8Array(hit.body), {
+      status: 200,
+      headers: { "Content-Type": hit.contentType, "Cache-Control": CACHE_CONTROL },
+    });
+  }
+
   try {
     const headers: Record<string, string> = { "User-Agent": UA };
 
@@ -46,17 +59,21 @@ export async function GET(req: NextRequest) {
       // Never follow redirects to an unvalidated host: only a direct 200 is served.
       redirect: "manual",
       cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (upstream.status !== 200 || !upstream.body) {
       return new NextResponse(null, { status: 404 });
     }
 
-    const out = new Headers();
-    out.set("Content-Type", upstream.headers.get("content-type") || "application/octet-stream");
-    out.set("Cache-Control", "public, max-age=86400, immutable");
+    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const body = new Uint8Array(await upstream.arrayBuffer());
+    setCachedImage(cacheKey, body, contentType);
 
-    return new NextResponse(upstream.body, { status: 200, headers: out });
+    return new NextResponse(body, {
+      status: 200,
+      headers: { "Content-Type": contentType, "Cache-Control": CACHE_CONTROL },
+    });
   } catch {
     return new NextResponse(null, { status: 404 });
   }

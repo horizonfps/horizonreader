@@ -70,7 +70,7 @@ function SearchView() {
           setSearched(true);
           setLoading(false);
         });
-    }, 400);
+    }, 300);
     return () => clearTimeout(t);
   }, [query, router]);
 
@@ -136,7 +136,7 @@ function SearchView() {
       ) : null}
 
       {items.length > 0 ? (
-        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5">
+        <div className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
           {items.map((item) => {
             const key = `${item.origin}:${item.externalId}`;
             if (seen.has(key)) return null;

@@ -91,7 +91,10 @@ export default function FavoritesCarousel({ items }: { items: FavItem[] }) {
           {items.map((item) => {
             const src = coverProxy(item.coverUrl);
             return (
-              <div key={item.slug} className="min-w-0 flex-[0_0_66%] px-2 sm:flex-[0_0_46%]">
+              <div
+                key={item.slug}
+                className="min-w-0 flex-[0_0_66%] px-2 sm:flex-[0_0_46%] md:flex-[0_0_32%] lg:flex-[0_0_24%]"
+              >
                 <div className="fav-tween origin-center will-change-transform">
                   <PrefetchLink
                     href={`/work/${item.slug}`}

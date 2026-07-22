@@ -14,6 +14,9 @@ const FLARE = process.env.FLARESOLVERR_URL || "http://localhost:8191";
 // Windows accepted by /top?type=trending (7/30/90 come back regardless).
 const EXTENDED_DAYS = new Set([180, 270, 360]);
 
+// Hard ceiling on direct API calls; FlareSolverr keeps its own longer budget.
+const FETCH_TIMEOUT_MS = 8_000;
+
 const TOP_TTL = 60 * 60 * 1000;
 let topCache: { data: unknown; at: number } | null = null;
 
@@ -24,6 +27,7 @@ export async function getComickTop(): Promise<any> {
     const res = await fetch(`${BASE}/top?accept_mature_content=false`, {
       headers: HEADERS,
       cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return topCache?.data ?? null;
     const data = await res.json();
@@ -165,7 +169,11 @@ export async function getComickTrending(opts: {
   });
   if (opts?.comic_types) qs.set("comic_types", opts.comic_types);
   try {
-    const res = await fetch(`${BASE}/top?${qs.toString()}`, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(`${BASE}/top?${qs.toString()}`, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) return [];
     const data = await res.json();
     const bucket = data?.[String(day)] ?? data?.trending?.[String(day)] ?? data?.["7"] ?? [];
@@ -177,7 +185,11 @@ export async function getComickTrending(opts: {
 
 export async function getComickGenres(): Promise<{ name: string; slug: string; group: string }[]> {
   try {
-    const res = await fetch(`${BASE}/genre`, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(`${BASE}/genre`, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) return [];
     const data = await res.json();
     if (!Array.isArray(data)) return [];
@@ -254,7 +266,11 @@ export async function getComickContentInfo(
   const url = `${BASE}/comic/${encodeURIComponent(id)}`;
   let data: any = null;
   try {
-    const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(url, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (res.ok) data = await res.json();
     else if (res.status === 403) data = await searchViaFlareSolverr(url);
   } catch {
@@ -265,13 +281,17 @@ export async function getComickContentInfo(
   return { genres: comickGenres(comic), contentRating: comic?.content_rating ?? null };
 }
 
-export async function searchComick(q: string): Promise<BackboneWork[]> {
+export async function searchComick(q: string, limit = 20): Promise<BackboneWork[]> {
   const query = (q || "").trim();
   if (!query) return [];
-  const url = `${BASE}/v1.0/search?${new URLSearchParams({ q: query, limit: "8" }).toString()}`;
+  const url = `${BASE}/v1.0/search?${new URLSearchParams({ q: query, limit: String(limit) }).toString()}`;
   let data: unknown = null;
   try {
-    const res = await fetch(url, { headers: HEADERS, cache: "no-store" });
+    const res = await fetch(url, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (res.ok) data = await res.json();
     else if (res.status === 403) data = await searchViaFlareSolverr(url);
   } catch {

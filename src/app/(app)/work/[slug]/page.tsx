@@ -99,9 +99,9 @@ export default async function WorkPage({
   const meta = [cap(work.type), cap(work.status), work.year].filter(Boolean).join(" · ");
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-3xl space-y-6">
       <header className="flex gap-4">
-        <div className="relative aspect-[2/3] w-28 shrink-0 overflow-hidden rounded-lg bg-surface">
+        <div className="relative aspect-[2/3] w-28 shrink-0 overflow-hidden rounded-lg bg-surface sm:w-40">
           {cover ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={cover} alt="" draggable={false} className="cover-img h-full w-full object-cover" />
@@ -109,7 +109,7 @@ export default async function WorkPage({
           <RatingBadge rating={work.rating} />
         </div>
         <div className="min-w-0 flex-1 space-y-1.5">
-          <h1 className="text-lg font-semibold leading-tight">{work.title}</h1>
+          <h1 className="text-lg font-semibold leading-tight sm:text-2xl">{work.title}</h1>
           {work.author ? <p className="text-sm text-muted">{work.author}</p> : null}
           {meta ? <p className="text-xs text-muted">{meta}</p> : null}
           <div className="flex flex-wrap gap-2 pt-1">
