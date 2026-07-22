@@ -24,6 +24,8 @@ import {
 import { SCRAPERS } from "@/lib/scrapers";
 import { keyToMangaId, syncNativeChapters } from "@/lib/scrapers/native";
 
+const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
+
 const DAY_MS = 86_400_000;
 const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
@@ -442,11 +444,16 @@ async function doResolveSourcesForWork(
   if (fresh) return;
 
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
-  // work.title is the English title when MangaDex has one (see mapManga). Distinct
-  // alt titles feed a fallback search so pt-BR/native-indexed sources still match.
-  const queries = [...new Set([work.title, ...parseArr(work.altTitles)])]
-    .filter(Boolean)
-    .slice(0, 3);
+  // Scan sources index Latin titles only, so CJK queries never match; trivial
+  // near-duplicates of a queued query add nothing. Both are skipped so a
+  // distinct official English alt still makes the query budget.
+  const queries: string[] = [];
+  for (const t of titles) {
+    if (CJK.test(t)) continue;
+    if (queries.some((q) => titleSimilarity(q, t) >= 0.9)) continue;
+    queries.push(t);
+    if (queries.length >= 3) break;
+  }
 
   // A dead Suwayomi must not block native scrapers; they run independently.
   let sources: SuwayomiSource[] = [];
