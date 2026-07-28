@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/jwt";
 
-const PUBLIC_PATHS = ["/login", "/api/auth/login"];
+// The solver facade authenticates with a secret path token instead of a
+// session: it is called by Suwayomi, which carries no cookies.
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/solver"];
 
 function isPublic(pathname: string) {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));

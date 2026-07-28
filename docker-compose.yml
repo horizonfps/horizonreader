@@ -10,7 +10,12 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
       DATABASE_URL: file:/data/app.db
       SUWAYOMI_URL: http://suwayomi:4567
-      FLARESOLVERR_URL: http://flaresolverr:8191
+      # Solver pool, tried in order and remembered per host. FlareSolverr owns
+      # POST and clears some sites Byparr misses; Byparr beats the managed
+      # challenges FlareSolverr is fingerprinted on.
+      SOLVERS: ${SOLVERS:-flaresolverr@http://flaresolverr:8191,byparr@http://byparr:8191}
+      # Shared secret in the path of the solver facade Suwayomi calls.
+      SOLVER_PROXY_TOKEN: ${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}
       # Uploaded avatars/banners live on the mounted data volume.
       UPLOAD_DIR: /data/uploads
       # Chapter pages are immutable, so they are served from disk after the
@@ -76,8 +81,10 @@ services:
       # older builds use EXTENSION_REPOS. Setting both is harmless.
       EXTENSION_STORES: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
       EXTENSION_REPOS: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
-      FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-false}"
-      FLARESOLVERR_URL: "http://flaresolverr:8191"
+      # Routed through the app's facade so the engine gets both solvers with
+      # fallback instead of the single one this setting can name.
+      FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-true}"
+      FLARESOLVERR_URL: "http://web:3000/api/solver/${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}"
       FLARESOLVERR_TIMEOUT: "60"
       FLARESOLVERR_SESSION_NAME: "suwayomi"
       FLARESOLVERR_SESSION_TTL: "15"
@@ -88,13 +95,36 @@ services:
     networks:
       - manga
 
-  # ---- Cloudflare challenge solver: opt-in, heavy (Chromium). Enable with
-  #      `--profile flaresolverr` + FLARESOLVERR_ENABLED=true. ----
+  # ---- Cloudflare challenge solver. Byparr drives a stealth-patched Firefox
+  #      and clears the managed challenges that FlareSolverr's chromedriver is
+  #      fingerprinted on. It answers the same /v1 endpoint, GET only. ----
+  #
+  # Pinned to the `main` digest: `latest` is still the v2.1.0 build from
+  # 2026-02, which leaks zombie processes and lacks blockMedia.
+  byparr:
+    image: ghcr.io/thephaseless/byparr:main@sha256:c75576e2a6debaec2ddcb7de5cfb8dcd2a2398c04aa7a3ec0fe14d1bd35584fa
+    container_name: byparr
+    restart: unless-stopped
+    # A fresh browser is launched per request; without this, camoufox dies with
+    # a multiprocessing.synchronize error on OCI/LXC hosts.
+    shm_size: 512mb
+    environment:
+      TZ: America/Sao_Paulo
+      LOG_LEVEL: INFO
+      BLOCK_MEDIA: "true"
+    expose:
+      - "8191"
+    # ~400MB per concurrent solve plus the uvicorn base.
+    mem_limit: ${SOLVER_MEM:-1500m}
+    networks:
+      - manga
+
+  # ---- Second solver: the only one that can POST through a challenge, and it
+  #      still clears sites Byparr reports as solved but is not. ----
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
     container_name: flaresolverr
     restart: unless-stopped
-    profiles: ["flaresolverr"]
     init: true
     environment:
       TZ: America/Sao_Paulo

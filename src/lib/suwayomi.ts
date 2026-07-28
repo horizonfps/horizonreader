@@ -51,13 +51,17 @@ export type SuwayomiChapter = {
 // Hard ceiling on every engine call: a hung Suwayomi must not hang the app.
 const GQL_TIMEOUT_MS = 30_000;
 
-async function gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+async function gql<T>(
+  query: string,
+  variables?: Record<string, unknown>,
+  timeoutMs = GQL_TIMEOUT_MS,
+): Promise<T> {
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
-    signal: AbortSignal.timeout(GQL_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Suwayomi ${res.status}`);
   const json = (await res.json()) as { data?: T; errors?: { message: string }[] };
@@ -84,6 +88,45 @@ export async function listSources(): Promise<SuwayomiSource[]> {
       sources { nodes { id name displayName lang iconUrl isConfigurable supportsLatest } }
     }`);
   return data.sources.nodes;
+}
+
+export type SuwayomiExtension = {
+  pkgName: string;
+  name: string;
+  lang: string;
+  isNsfw: boolean;
+  isInstalled: boolean;
+  isObsolete: boolean;
+  hasUpdate: boolean;
+  versionName?: string;
+};
+
+// ---- extensions (source catalogue) ----
+export async function listExtensions(): Promise<SuwayomiExtension[]> {
+  const data = await gql<{ extensions: { nodes: SuwayomiExtension[] } }>(`
+    query {
+      extensions {
+        nodes { pkgName name lang isNsfw isInstalled isObsolete hasUpdate versionName }
+      }
+    }`);
+  return data.extensions.nodes;
+}
+
+// Pull the repo index again so newly published extensions become visible.
+export async function fetchExtensions(): Promise<void> {
+  await gql(`mutation { fetchExtensions(input: {}) { extensions { pkgName } } }`);
+}
+
+export async function installExtension(pkgName: string, timeoutMs = 120_000): Promise<void> {
+  await gql(
+    `mutation Install($id: String!) {
+      updateExtension(input: { id: $id, patch: { install: true } }) {
+        extension { pkgName isInstalled }
+      }
+    }`,
+    { id: pkgName },
+    timeoutMs,
+  );
 }
 
 export async function browseSource(

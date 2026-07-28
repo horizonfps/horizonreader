@@ -2,7 +2,14 @@
 // carrying any clearance won by an earlier solve, and [[flare]] is only paid
 // when that fails: 403 WAF, datacenter-IP block, or a real CF challenge.
 
-import { dropClearance, flareEnabled, flareSolve, getClearance } from "./flare";
+import {
+  dropClearance,
+  flareEnabled,
+  flareSolve,
+  getClearance,
+  solveClearance,
+  solverSupportsPost,
+} from "./flare";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
@@ -47,13 +54,7 @@ export async function getText(url: string, referer?: string): Promise<string> {
   }
 }
 
-export async function postForm(
-  url: string,
-  form: Record<string, string>,
-  referer?: string,
-): Promise<string> {
-  const encoded = new URLSearchParams(form).toString();
-  const hadClearance = !!getClearance(url);
+async function rawPost(url: string, encoded: string, referer?: string): Promise<string> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT);
   try {
@@ -70,11 +71,31 @@ export async function postForm(
     });
     if (!res.ok) throw new Error(`POST ${url} -> ${res.status}`);
     return await res.text();
-  } catch (e) {
-    if (hadClearance) dropClearance(url);
-    if (flareEnabled()) return flareSolve("request.post", url, encoded);
-    throw e;
   } finally {
     clearTimeout(t);
+  }
+}
+
+export async function postForm(
+  url: string,
+  form: Record<string, string>,
+  referer?: string,
+): Promise<string> {
+  const encoded = new URLSearchParams(form).toString();
+  const hadClearance = !!getClearance(url);
+  try {
+    return await rawPost(url, encoded, referer);
+  } catch (e) {
+    // Stale clearance is worse than none: drop it so the solve starts clean.
+    if (hadClearance) dropClearance(url);
+    if (!flareEnabled()) throw e;
+    // A GET-only solver can still hand over the clearance cookies; the POST is
+    // then replayed here, which is the only way to keep form-based sources.
+    if (!solverSupportsPost()) {
+      const clearance = await solveClearance(url);
+      if (!clearance) throw e;
+      return rawPost(url, encoded, referer);
+    }
+    return flareSolve("request.post", url, encoded);
   }
 }

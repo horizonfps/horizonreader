@@ -30,8 +30,25 @@ docker compose up -d --build web
 
 - Teste local: http://localhost:41573
 - Admin do Suwayomi (extensões / fontes): http://localhost:4567 (só localhost).
-- FlareSolverr (fontes protegidas por Cloudflare) é opcional e pesado. Para ligar:
-  `FLARESOLVERR_ENABLED=true` no `.env` e `docker compose --profile flaresolverr up -d`.
+- Os dois solvers de desafio (FlareSolverr e Byparr) sobem junto com o resto.
+  Nenhum vence sozinho: o FlareSolverr é o único que faz POST atravessando o
+  desafio, o Byparr limpa os *managed challenges* em que o FlareSolverr é
+  detectado. O app tenta os dois e lembra qual funcionou por host.
+  `SOLVER_PROXY_TOKEN` no `.env` é obrigatório: é o segredo no caminho de
+  `/api/solver/<token>/v1`, a fachada que o Suwayomi usa para também ganhar o
+  fallback (ele só aceita um `FLARESOLVERR_URL`).
+
+## 1.1 Instalar as fontes do Suwayomi
+
+Um Suwayomi novo não vem com extensão nenhuma, e um conjunto instalado à mão
+envelhece (a produção ficou sem nenhuma fonte pt-BR). Depois de subir:
+
+```
+docker compose exec web npm run sync-extensions
+docker compose exec web npm run sync-extensions -- --dry-run   # só listar
+```
+
+Instala todas as extensões en / pt-BR / all não adultas do repo Keiyoushi.
 
 ## 2. Cloudflare Tunnel → app
 
