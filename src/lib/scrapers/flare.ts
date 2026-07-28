@@ -19,7 +19,10 @@ const FLARE_TIMEOUT = Number(process.env.FLARE_TIMEOUT_MS || 60_000);
 const CONCURRENCY = Number(process.env.FLARE_CONCURRENCY || 2);
 // Past this, callers fail fast instead of queueing behind a stalled browser.
 const MAX_QUEUE = Number(process.env.FLARE_MAX_QUEUE || 8);
-const CLEARANCE_TTL_MS = 30 * 60_000;
+// Expiring early is what costs a browser boot and a 10-30s wait. Expiring late
+// costs one fast rejection before the solve that would have happened anyway,
+// which http.ts already handles by dropping the cookie and solving clean.
+const CLEARANCE_TTL_MS = Number(process.env.CLEARANCE_TTL_MS || 90 * 60_000);
 // Headroom for the solver to answer with its own error instead of being cut
 // off mid-solve.
 const SOLVE_GRACE_MS = 5_000;

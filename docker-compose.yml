@@ -117,12 +117,27 @@ services:
     # A fresh browser is launched per request; without this, camoufox dies with
     # a multiprocessing.synchronize error on OCI/LXC hosts.
     shm_size: 512mb
+    # Every solve builds a Firefox profile from scratch under /tmp, which on the
+    # overlay filesystem is both the slowest part of the boot and gigabytes of
+    # writes a day.
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     environment:
       TZ: America/Sao_Paulo
       LOG_LEVEL: INFO
       BLOCK_MEDIA: "true"
     expose:
       - "8191"
+    # The image ships a 15m healthcheck pointed at /health, which drives a real
+    # browser through a full solve. Docker never restarts an unhealthy container
+    # outside Swarm, so that spent ~96 browser boots a day on a status label;
+    # the docs route answers the same question for free.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/docs"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     # ~400MB per concurrent solve plus the uvicorn base.
     mem_limit: ${SOLVER_MEM:-1500m}
     networks:

@@ -140,8 +140,17 @@ async function solverProbes(): Promise<Probe[]> {
     solverTargets().map(async ({ name, url }) => {
       const base = url.replace(/\/+$/, "");
       const result = await timed(async () => {
-        // Byparr answers /health by driving a real browser, so it can take
-        // several seconds under load without being broken.
+        // Byparr answers /health by driving a real browser through a full solve
+        // against an external site, so opening this panel would cost a browser
+        // boot and seconds of waiting. Its docs route is static.
+        if (name === "byparr") {
+          const res = await fetch(`${base}/docs`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(5_000),
+          }).catch(() => null);
+          if (res?.ok) return "online";
+          throw new Error(res ? `HTTP ${res.status}` : "sem resposta");
+        }
         const health = await fetch(`${base}/health`, {
           cache: "no-store",
           signal: AbortSignal.timeout(15_000),
