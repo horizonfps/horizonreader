@@ -24,7 +24,10 @@ const CASES: Case[] = [
   ["One Punch Man [Manga]", ["One-Punch Man"], true],
   ["Chainsaw Man - Digital Colored Comics", ["Chainsaw Man"], true],
   ["Vagabond Online Leitura", ["Vagabond"], true],
-  ["Vinland Saga Season 2", ["Vinland Saga"], true],
+  ["Vagabond Vol. 3", ["Vagabond Volume 3"], true],
+  ["Hunter x Hunter", ["HunterXHunter"], true],
+  ["Zyuzyutsu Kaisen", ["Jujutsu Kaisen"], true],
+  ["[Oshi no Ko]", ["Oshi no Ko", "推しの子"], true],
 
   // longer official title vs short romaji
   ["Demon Slayer: Kimetsu no Yaiba", ["Kimetsu no Yaiba"], true],
@@ -42,6 +45,16 @@ const CASES: Case[] = [
   ["Kimetsu no Yaiba: Gaiden", ["Kimetsu no Yaiba"], false],
   ["Boku no Kokoro no Yabai Yatsu", ["Boku no Hero Academia"], false],
   ["Reborn as a Vending Machine", ["Reborn!"], false],
+  // franchise entries: the season is the identity, not the words
+  ["Vinland Saga Part 2", ["Vinland Saga"], false],
+  ["Mob Psycho 100 II", ["Mob Psycho 100"], false],
+  ["Overlord 2", ["Overlord"], false],
+  ["[Oshi no Ko]", ["【Solo Leveling】"], false],
+  ["(Raw)", ["[Oshi no Ko]"], false],
+  ["Dai Akutou Shoujo", ["Dai Akutou Shonen"], false],
+  ["Bakugan", ["Bakuman"], false],
+  ["Death Notice", ["Death Note"], false],
+  ["Beach", ["Bleach"], false],
 ];
 
 let failed = 0;

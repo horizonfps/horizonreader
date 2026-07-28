@@ -10,15 +10,20 @@ const BRACKETS = /[[(（【][^\])）】]*[\])）】]/g;
 // Strip volume/season/part markers that create false distinctions between
 // otherwise-identical works. Kept conservative (no bare roman-numeral stripping).
 const MARKERS =
-  /\b(season|part|pt|vol|volume|cour|arc)\s*\d+\b|\b\d+(st|nd|rd|th)\s+season\b|\b(2nd|3rd|final)\s+season\b/gi;
+  /\b(season|part|pt|vol|volume|cour|arc)[.\s]*\d+\b|\b\d+(st|nd|rd|th)\s+season\b|\b(2nd|3rd|final)\s+season\b/gi;
 // Tilde-delimited subtitles are decoration on the japanese side of a title.
 const TILDE_SUB = /[~〜～][^~〜～]*[~〜～]?/g;
 
+// "[Oshi no Ko]" and "【Solo Leveling】" are the whole title, not an annotation.
+// Stripping brackets blindly emptied them, and two empty keys used to score a
+// perfect match, which merged unrelated works.
+function stripBrackets(s: string): string {
+  const out = s.replace(BRACKETS, " ");
+  return out.replace(/[\p{P}\s]/gu, "") ? out : s.replace(/[[(（【\])）】]/g, " ");
+}
+
 export function norm(s: string): string {
-  return (s || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(BRACKETS, " ")
+  return stripBrackets((s || "").normalize("NFKC").toLowerCase())
     .replace(/&/g, " and ")
     .replace(MARKERS, " ")
     .normalize("NFKD")
@@ -26,6 +31,24 @@ export function norm(s: string): string {
     .replace(/[^\p{L}\p{N}\s]/gu, " ") // drop punctuation, keep letters/numbers
     .replace(/\s+/g, " ")
     .trim();
+}
+
+const ROMAN_ORDINAL: Record<string, number> = { ii: 2, iii: 3, iv: 4, vi: 6, vii: 7, viii: 8 };
+
+// Which entry of a franchise a title names. MARKERS deletes those words, so
+// without this "Vinland Saga" and "Vinland Saga Part 2" normalize to the same
+// string and every season matches every other one.
+export function seasonOf(title: string): number | null {
+  const s = (title || "").normalize("NFKC").toLowerCase();
+  const named = s.match(/\b(?:season|temporada|part|parte|cour|vol|volume)\s*(\d{1,2})\b/);
+  if (named) return Number(named[1]);
+  const ordinal = s.match(/\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/);
+  if (ordinal) return Number(ordinal[1]);
+  const roman = s.match(/\s([ivx]{2,4})\s*$/);
+  if (roman && ROMAN_ORDINAL[roman[1]]) return ROMAN_ORDINAL[roman[1]];
+  const trailing = s.match(/\s(\d{1,2})\s*$/);
+  if (trailing) return Number(trailing[1]);
+  return null;
 }
 
 // Particles and articles that carry no identity, across en/ja-romaji/pt.
@@ -68,6 +91,7 @@ export function romanFold(s: string): string {
     .replace(/\bwo\b/g, "o")
     .replace(/sy(?=[auo])/g, "sh")
     .replace(/jy(?=[auo])/g, "j")
+    .replace(/zy(?=[auo])/g, "j")
     .replace(/ty(?=[auo])/g, "ch")
     .replace(/m(?=[bp])/g, "n")
     .replace(/(.)\1+/g, "$1")
@@ -80,8 +104,9 @@ function core(s: string): string {
   return kept.length ? kept.join(" ") : s;
 }
 
+// Two empty keys are not a match: they are two titles we failed to read.
 const ratio = (a: string, b: string) =>
-  !a && !b ? 1 : 1 - distance(a, b) / Math.max(a.length, b.length);
+  !a || !b ? 0 : 1 - distance(a, b) / Math.max(a.length, b.length);
 
 // fuzzywuzzy-style token_set_ratio: robust to word reordering + extra tokens.
 export function tokenSetRatio(a: string, b: string): number {
@@ -155,7 +180,7 @@ const viewCache = new Map<string, View>();
 function viewOf(title: string): View {
   const hit = viewCache.get(title);
   if (hit) return hit;
-  const cleaned = (title || "").replace(BRACKETS, " ").replace(TILDE_SUB, " ");
+  const cleaned = stripBrackets(title || "").replace(TILDE_SUB, " ");
   const plain = norm(cleaned);
   const folded = romanFold(plain);
   const parts = cleaned.split(SEGMENT_SPLIT).map((p) => romanFold(norm(p))).filter(Boolean);
@@ -183,7 +208,15 @@ export function strictSimilarity(a: string, b: string): number {
 export function titleSimilarity(a: string, b: string): number {
   const va = viewOf(a);
   const vb = viewOf(b);
-  return Math.max(
+  const sa = seasonOf(a);
+  const sb = seasonOf(b);
+  // Different entries of the same franchise share every word, so the score has
+  // to carry the season, not the string.
+  if (sa !== null && sb !== null && sa !== sb) return 0;
+  // One side naming a later season while the other names none is usually the
+  // base work against its sequel; enough of a penalty to fall under threshold.
+  const seasonPenalty = (sa ?? 1) > 1 !== (sb ?? 1) > 1 ? 0.75 : 1;
+  return seasonPenalty * Math.max(
     combine(va.plain, vb.plain),
     combine(va.folded, vb.folded),
     combine(va.core, vb.core) * 0.99,
@@ -229,14 +262,19 @@ function subsetAccepts(a: View, b: View): boolean {
   const [small, big] = a.folded.length <= b.folded.length ? [a, b] : [b, a];
   const smallTokens = tokens(small.folded);
   const bigTokens = new Set(tokens(big.folded));
-  if (smallTokens.length < 2 || small.folded.length < 12) return false;
+  if (smallTokens.length < 2) return false;
   for (const t of smallTokens) if (!bigTokens.has(t)) return false;
 
   const smallSet = new Set(smallTokens);
   for (const t of bigTokens) if (!smallSet.has(t) && (SEQUEL.has(t) || /\d/.test(t))) return false;
 
-  if (big.folded.startsWith(small.folded)) return true;
-  return big.segments.some((seg) => seg === small.folded);
+  // A short title says too little either way: "The Breaker: New Waves" is a
+  // sequel and "Slam Dunk: Sports Edition" is not, and nothing in the string
+  // separates them. Below this length the pair is left unmatched.
+  if (small.folded.length < 12) return false;
+  return (
+    big.folded.startsWith(small.folded) || big.segments.some((seg) => seg === small.folded)
+  );
 }
 
 export function matchScore(candidate: string, aliases: string[]): number {
@@ -255,10 +293,16 @@ export function isMatch(score: number, candidate: string, aliases: string[]): bo
   const vc = viewOf(candidate);
   const cTokens = tokens(vc.plain);
   if (!cTokens.length) return false;
+  const cSeason = seasonOf(candidate);
 
   for (const a of aliases) {
     if (!a) continue;
     const va = viewOf(a);
+    // Season markers are normalized away, so the containment rule would happily
+    // fold a sequel onto its base work.
+    const aSeason = seasonOf(a);
+    if ((cSeason ?? 1) > 1 !== (aSeason ?? 1) > 1) continue;
+    if (cSeason !== null && aSeason !== null && cSeason !== aSeason) continue;
     const aTokens = tokens(va.plain);
     if (!aTokens.length) continue;
     const minTokens = Math.min(cTokens.length, aTokens.length);
