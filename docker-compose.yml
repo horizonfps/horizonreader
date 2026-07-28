@@ -18,6 +18,10 @@ services:
       IMAGE_CACHE_DIR: /data/imgcache
       IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-8192}
       IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-512}
+      # Each concurrent solve is one Chromium context, so this is the knob that
+      # decides how much CPU/RAM FlareSolverr can take.
+      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-2}
+      FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-8}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
     volumes:

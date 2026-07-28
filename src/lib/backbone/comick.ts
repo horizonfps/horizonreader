@@ -1,15 +1,12 @@
 // Comick client (api.comick.dev). Server-side only.
 
 import type { BackboneWork, SectionItem, WorkStatus, WorkType } from "@/lib/backbone/types";
+import { flareSolve } from "@/lib/scrapers/flare";
 
 const BASE = "https://api.comick.dev";
 const COVERS = "https://meo.comick.pictures";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) horizonreader";
 const HEADERS: Record<string, string> = { "User-Agent": UA, Accept: "application/json" };
-
-// FlareSolverr proxy for Cloudflare-protected requests. Docker sets this to the
-// internal service; dev falls back to the published localhost port.
-const FLARE = process.env.FLARESOLVERR_URL || "http://localhost:8191";
 
 // Windows accepted by /top?type=trending (7/30/90 come back regardless).
 const EXTENDED_DAYS = new Set([180, 270, 360]);
@@ -237,18 +234,12 @@ function extractJson(html: string): string | null {
   return null;
 }
 
+// Routed through the shared gateway so Comick's 403s queue behind the same
+// concurrency limit and host breaker as the scrapers, instead of spawning
+// their own browser contexts.
 async function searchViaFlareSolverr(url: string): Promise<any> {
   try {
-    const res = await fetch(`${FLARE}/v1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cmd: "request.get", url, maxTimeout: 60000 }),
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-    const body = await res.json();
-    const html = body?.solution?.response;
-    if (typeof html !== "string") return null;
+    const html = await flareSolve("request.get", url);
     const json = extractJson(html);
     return json ? JSON.parse(json) : null;
   } catch {
