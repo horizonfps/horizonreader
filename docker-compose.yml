@@ -117,15 +117,18 @@ services:
     # A fresh browser is launched per request; without this, camoufox dies with
     # a multiprocessing.synchronize error on OCI/LXC hosts.
     shm_size: 512mb
-    # Every solve builds a Firefox profile from scratch under /tmp, which on the
-    # overlay filesystem is both the slowest part of the boot and gigabytes of
-    # writes a day.
+    # Every solve builds a Firefox profile from scratch, which on the overlay
+    # filesystem is both the slowest part of the boot and gigabytes of writes a
+    # day. Scratch space is redirected here rather than mounted over /tmp: the
+    # image keeps its Python interpreter under /tmp, so a tmpfs there hides the
+    # interpreter and the container never starts.
     tmpfs:
-      - /tmp:size=256m,mode=1777
+      - /profiles:size=256m,mode=1777
     environment:
       TZ: America/Sao_Paulo
       LOG_LEVEL: INFO
       BLOCK_MEDIA: "true"
+      TMPDIR: /profiles
     expose:
       - "8191"
     # The image ships a 15m healthcheck pointed at /health, which drives a real
