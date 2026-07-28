@@ -82,6 +82,23 @@ docker compose exec web npm run user -- list
 - Levar dados do dev: pare o `npm run dev`, copie `prisma/dev.db` para
   `data/app.db` antes do primeiro `up`.
 
+## Painel de infra — `/info`
+
+Só admin (`isAdmin`) enxerga; qualquer outra sessão é redirecionada. Mostra CPU,
+RAM, disco, swap, carga, PSI, rede e I/O do host, estatísticas por container,
+saúde do engine e dos solvers, tamanho dos caches e um feed de erros dos logs.
+
+Depende de três coisas no `docker-compose.yml`, todas já configuradas:
+
+- `/proc:/host/proc:ro` no container `web` — de onde saem os contadores da
+  máquina. Sem isso o painel sobe, mas a seção do host fica vazia.
+- O serviço `dockerproxy` — proxy do socket do Docker que libera só GET
+  (`CONTAINERS`, `INFO`, `VERSION`, `PING`), de onde saem stats e logs dos
+  containers. Nunca publique essa porta no host.
+- `./suwayomi:/suwayomi:ro`, usado só para medir a pasta de downloads.
+
+O painel é somente leitura: nenhuma rota escreve ou reinicia nada.
+
 ## Atualizar depois de mexer no código
 
 ```

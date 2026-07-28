@@ -29,13 +29,22 @@ services:
       FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-8}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # /info panel: host counters come from the mounted procfs, container stats
+      # and logs from the read-only socket proxy.
+      HOST_PROC: /host/proc
+      DOCKER_API_URL: http://dockerproxy:2375
     volumes:
       - ./data:/data
+      # Read-only, only so the panel can size the download folder.
+      - ./suwayomi:/suwayomi:ro
+      # Host CPU/RAM/network/pressure counters for /info.
+      - /proc:/host/proc:ro
     ports:
       # Host port is only for local checks; the tunnel reaches web:3000 internally.
       - "${WEB_PORT:-3000}:3000"
     depends_on:
       - suwayomi
+      - dockerproxy
     networks:
       - manga
 
@@ -131,6 +140,26 @@ services:
       LOG_LEVEL: info
     expose:
       - "8191"
+    networks:
+      - manga
+
+  # ---- Read-only window into the Docker daemon for the /info panel. Only GET
+  #      endpoints are whitelisted, so the app can never drive the daemon even
+  #      if it is compromised. Never publish this port. ----
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: dockerproxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      INFO: 1
+      VERSION: 1
+      PING: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - "2375"
     networks:
       - manga
 
