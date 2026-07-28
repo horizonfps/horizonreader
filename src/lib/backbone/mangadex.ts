@@ -1,8 +1,8 @@
 // MangaDex client (api.mangadex.org, no auth). Server-side only.
 
-import type { BackboneWork, WorkStatus } from "@/lib/backbone/types";
-import { originLangToType } from "@/lib/backbone/types";
-import { BLOCKED_MDX_TAGS } from "@/lib/backbone/filter";
+import type { BackboneWork, WorkStatus } from "./types";
+import { originLangToType } from "./types";
+import { BLOCKED_MDX_TAGS } from "./filter";
 
 const BASE = "https://api.mangadex.org";
 const COVERS = "https://uploads.mangadex.org/covers";
@@ -43,19 +43,24 @@ function schedule(): Promise<void> {
 // Hard ceiling per call: a hung MangaDex must not hang search or resolve.
 const FETCH_TIMEOUT_MS = 8_000;
 
-async function getJson<T = unknown>(path: string): Promise<T | null> {
+async function getJson<T = unknown>(path: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<T | null> {
   try {
     await schedule();
     const res = await fetch(`${BASE}${path}`, {
       headers: HEADERS,
       cache: "no-store",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
     return null;
   }
+}
+
+// Shared entry point so every MangaDex call in the app rides the same throttle.
+export async function mdxJson<T = unknown>(path: string, timeoutMs?: number): Promise<T | null> {
+  return getJson<T>(path, timeoutMs);
 }
 
 type MdxManga = {
@@ -95,13 +100,31 @@ function firstValue(o?: Record<string, string>): string {
   return "";
 }
 
+// Query order decides which titles a source sweep actually gets to try, so the
+// languages scan sites index by come first: english, portuguese, romaji.
+function langRank(lang: string): number {
+  const l = lang.toLowerCase();
+  if (l === "en") return 0;
+  if (l === "pt-br" || l === "pt") return 1;
+  if (l.endsWith("-ro")) return 2;
+  return 3;
+}
+
 function collectTitles(m: MdxManga): string[] {
-  const out = new Set<string>();
-  const t = m.attributes?.title;
-  if (t) for (const v of Object.values(t)) if (v) out.add(v);
+  const ranked: { title: string; rank: number }[] = [];
+  const seen = new Set<string>();
+  const push = (lang: string, value: string) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    ranked.push({ title: value, rank: langRank(lang) });
+  };
+  for (const [lang, v] of Object.entries(m.attributes?.title ?? {})) push(lang, v);
   for (const alt of m.attributes?.altTitles ?? [])
-    for (const v of Object.values(alt ?? {})) if (v) out.add(v);
-  return [...out];
+    for (const [lang, v] of Object.entries(alt ?? {})) push(lang, v);
+  return ranked
+    .map((r, i) => ({ ...r, i }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map((r) => r.title);
 }
 
 function coverUrl(m: MdxManga): string | null {

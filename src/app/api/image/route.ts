@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { scraperHosts } from "@/lib/scrapers";
+import { isAllowedImageHost } from "@/lib/scrapers";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
 import { getDiskImage, setDiskImage } from "@/lib/diskCache";
 
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     } catch {
       return NextResponse.json({ error: "bad_url" }, { status: 400 });
     }
-    if (u.protocol !== "https:" || !scraperHosts().has(u.host)) {
+    if (u.protocol !== "https:" || !isAllowedImageHost(u.host)) {
       return NextResponse.json({ error: "host_not_allowed" }, { status: 400 });
     }
     target = u.toString();

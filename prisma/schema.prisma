@@ -113,6 +113,7 @@ model ScrapedChapter {
   chapterKey   String // chapter page URL
   name         String
   number       Float      @default(0)
+  scanlator    String?
   uploadDate   DateTime?
   createdAt    DateTime   @default(now())
   sourceLink   SourceLink @relation(fields: [sourceLinkId], references: [id], onDelete: Cascade)

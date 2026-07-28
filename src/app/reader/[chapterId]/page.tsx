@@ -39,10 +39,13 @@ async function loadNative(chapterId: number): Promise<ReaderData | null> {
 
   const siblingRows = await prisma.scrapedChapter.findMany({
     where: { sourceLinkId: row.sourceLinkId },
-    select: { id: true, number: true, uploadDate: true },
+    select: { id: true, number: true, scanlator: true, uploadDate: true },
   });
+  // Stay inside the open chapter's scan group, so next/prev never jumps to a
+  // different group's upload of the same number.
+  const pool = siblingRows.filter((s) => scanlatorKey(s.scanlator) === scanlatorKey(row.scanlator));
   const siblings = dedupeByNumber(
-    siblingRows.map((s) => ({
+    (pool.length ? pool : siblingRows).map((s) => ({
       id: s.id,
       name: "",
       chapterNumber: s.number,

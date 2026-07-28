@@ -3,7 +3,14 @@
 
 import { prisma } from "@/lib/db";
 import type { BackboneWork } from "@/lib/backbone/types";
-import { norm, matchKeys, slugify, titleSimilarity } from "@/lib/backbone/normalize";
+import {
+  norm,
+  matchKeys,
+  slugify,
+  matchScore,
+  isMatch,
+  strictSimilarity,
+} from "@/lib/backbone/normalize";
 import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
 import { isMuted, partitionByHealth, recordFail, recordOk } from "@/lib/backbone/sourceStats";
@@ -32,14 +39,18 @@ const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
 const SOURCE_TIMEOUT = 6_000;
 const SCRAPER_TIMEOUT = 45_000;
+const FAST_SCRAPER_TIMEOUT = 12_000;
 // Hard ceiling on the whole Suwayomi sweep. Without it the pass lasts as long
 // as the slowest extension, which is where the multi-minute waits came from.
 const SWEEP_DEADLINE_MS = 20_000;
+// The pass that runs after the page is served has no reader waiting on it, so
+// it can afford to reach every remaining source.
+const BACKGROUND_SWEEP_MS = 180_000;
 // Suwayomi answers searches concurrently; the old serial-ish pass left the
 // engine idle while the request waited on timeouts.
-const SEARCH_CONCURRENCY = 24;
-// Combined token_set + token_sort floor. Lower than the old token_set-only 0.88
-// because the new metric is stricter (a subset title no longer scores 1.0).
+const SEARCH_CONCURRENCY = 32;
+// Floor for accepting a canonicalization onto another backbone entry. Source
+// matching uses the length-aware rule in normalize instead.
 const MATCH_THRESHOLD = 0.8;
 // Merging two backbone works into one is worse than duplicating, so hold it to a
 // near-identical primary title.
@@ -108,12 +119,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Bounded-concurrency worker pool that stops handing out work past a deadline.
+// Returns what it never got to, so the caller can finish the sweep off the
+// request path instead of silently dropping those sources.
 async function runPool<T>(
   items: T[],
   limit: number,
   deadline: number,
   fn: (item: T) => Promise<void>,
-): Promise<void> {
+): Promise<T[]> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length && Date.now() < deadline) {
@@ -122,6 +135,7 @@ async function runPool<T>(
     }
   });
   await Promise.all(workers);
+  return items.slice(next);
 }
 
 function descriptiveData(bw: BackboneWork) {
@@ -186,7 +200,7 @@ export async function upsertWork(bw: BackboneWork): Promise<{ id: number; create
     select: { id: true, title: true, altTitles: true, matchKeys: true },
     take: 5,
   });
-  const hit = preFilter.find((h) => titleSimilarity(bw.title, h.title) >= MERGE_THRESHOLD);
+  const hit = preFilter.find((h) => strictSimilarity(bw.title, h.title) >= MERGE_THRESHOLD);
   if (hit) {
     await prisma.work.update({
       where: { id: hit.id },
@@ -286,18 +300,28 @@ async function syncMatch(source: SuwayomiSource, workId: number, result: Suwayom
 // One source carries one edition of a work, so only the single best candidate
 // may be linked. Syncing every result over the threshold was what put the same
 // site on the page four or five times.
-function bestCandidate(mangas: SuwayomiManga[], titles: string[]): SuwayomiManga | null {
-  let best: SuwayomiManga | null = null;
+function pickBest<T extends { title: string }>(results: T[], titles: string[]): T | null {
+  let best: T | null = null;
   let bestScore = 0;
-  for (const result of mangas.slice(0, 5)) {
-    let score = 0;
-    for (const t of titles) score = Math.max(score, titleSimilarity(result.title, t));
+  for (const result of results.slice(0, 8)) {
+    const score = matchScore(result.title, titles);
     if (score > bestScore) {
       bestScore = score;
       best = result;
     }
   }
-  return bestScore >= MATCH_THRESHOLD ? best : null;
+  return best && isMatch(bestScore, best.title, titles) ? best : null;
+}
+
+function bestCandidate(mangas: SuwayomiManga[], titles: string[]): SuwayomiManga | null {
+  return pickBest(mangas, titles);
+}
+
+function bestScraperCandidate(
+  results: { key: string; title: string }[],
+  titles: string[],
+): { key: string; title: string } | null {
+  return pickBest(results, titles);
 }
 
 async function searchAndMatch(
@@ -348,20 +372,24 @@ async function processScraper(
   workId: number,
   queries: string[],
   titles: string[],
+  ref: { origin: string; externalId: string },
 ) {
   try {
+    // A source that can be addressed by the backbone id skips title matching
+    // entirely, which is the only way to never lose a work to a name mismatch.
     let match: { key: string; title: string } | null = null;
-    for (const query of queries) {
-      const results = await scraper.search(query).catch(() => []);
-      for (const r of results.slice(0, 5)) {
-        let best = 0;
-        for (const t of titles) best = Math.max(best, titleSimilarity(r.title, t));
-        if (best >= MATCH_THRESHOLD) {
-          match = r;
+    const direct = scraper.directKey?.(ref.origin, ref.externalId) ?? null;
+    if (direct) {
+      match = { key: direct, title: titles[0] ?? "" };
+    } else {
+      for (const query of queries) {
+        const results = await scraper.search(query).catch(() => []);
+        const best = bestScraperCandidate(results, titles);
+        if (best) {
+          match = best;
           break;
         }
       }
-      if (match) break;
     }
     if (!match) return;
 
@@ -415,7 +443,7 @@ const inFlightResolves = new Map<number, Promise<void>>();
 
 export function resolveSourcesForWork(
   workId: number,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; deep?: boolean },
 ): Promise<void> {
   const existing = inFlightResolves.get(workId);
   if (existing && !opts?.force) return existing;
@@ -450,7 +478,7 @@ function pumpBackground() {
     bgQueued.delete(workId);
     bgActive += 1;
     bgDoneAt.set(workId, Date.now());
-    resolveSourcesForWork(workId)
+    resolveSourcesForWork(workId, { deep: false })
       .catch(() => {})
       .finally(() => {
         bgActive -= 1;
@@ -461,13 +489,17 @@ function pumpBackground() {
 
 async function doResolveSourcesForWork(
   workId: number,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; deep?: boolean },
 ): Promise<void> {
   const force = opts?.force ?? false;
+  // A viewport warm must not start a three-minute sweep per card.
+  const deep = opts?.deep ?? true;
 
   let work: {
     title: string;
     altTitles: string | null;
+    origin: string;
+    externalId: string;
     links: { lastSyncedAt: Date | null; chapterCount: number }[];
   } | null;
   try {
@@ -476,6 +508,8 @@ async function doResolveSourcesForWork(
       select: {
         title: true,
         altTitles: true,
+        origin: true,
+        externalId: true,
         links: { select: { lastSyncedAt: true, chapterCount: true } },
       },
     });
@@ -495,15 +529,16 @@ async function doResolveSourcesForWork(
   if (fresh) return;
 
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
+  const ref = { origin: work.origin, externalId: work.externalId };
   // Scan sources index Latin titles only, so CJK queries never match; trivial
   // near-duplicates of a queued query add nothing. Both are skipped so a
   // distinct official English alt still makes the query budget.
   const queries: string[] = [];
   for (const t of titles) {
     if (CJK.test(t)) continue;
-    if (queries.some((q) => titleSimilarity(q, t) >= 0.9)) continue;
+    if (queries.some((q) => strictSimilarity(q, t) >= 0.9)) continue;
     queries.push(t);
-    if (queries.length >= 3) break;
+    if (queries.length >= 4) break;
   }
 
   // A dead Suwayomi must not block native scrapers; they run independently.
@@ -518,25 +553,32 @@ async function doResolveSourcesForWork(
   const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
   const targets = wanted.length ? wanted : sources;
 
-  // Native scrapers route through FlareSolverr and cost tens of seconds, so they
-  // run detached: the page never waits on them, and their links show up on the
-  // next poll. Muted sources are swept after the healthy ones, off the clock.
-  runScraperLane(workId, queries, titles);
+  // Solver-backed scrapers cost tens of seconds, so they run detached: the page
+  // never waits on them and their links show up on the next poll. Muted sources
+  // are swept after the healthy ones, off the clock.
+  runScraperLane(workId, queries, titles, ref);
 
   const { live, muted } = partitionByHealth(targets);
   const deadline = Date.now() + SWEEP_DEADLINE_MS;
-  await runPool(live, SEARCH_CONCURRENCY, deadline, (s) =>
-    processSource(s, workId, queries, titles, deadline),
-  );
+  const [pending] = await Promise.all([
+    runPool(live, SEARCH_CONCURRENCY, deadline, (s) =>
+      processSource(s, workId, queries, titles, deadline),
+    ),
+    // Plain-API sources answer in a second and are the most reliable link a
+    // work can get, so they are worth blocking the first paint on.
+    runFastScrapers(workId, queries, titles, ref),
+  ]);
 
   await pruneDuplicateLinks(workId);
   await promotePrimary(workId);
 
-  if (muted.length) {
-    // Muted sources still get a full pass, just never in front of the reader:
-    // it is how a recovered source earns its way back into the fast lane.
-    const retryDeadline = Date.now() + SWEEP_DEADLINE_MS;
-    void runPool(muted, SEARCH_CONCURRENCY, retryDeadline, (s) =>
+  // Whatever the render budget could not reach still gets searched, just never
+  // in front of the reader. It is how a work ends up with every source it has
+  // and how a recovered source earns its way back into the fast lane.
+  const leftovers = deep ? [...pending, ...muted] : [];
+  if (leftovers.length) {
+    const retryDeadline = Date.now() + BACKGROUND_SWEEP_MS;
+    void runPool(leftovers, SEARCH_CONCURRENCY, retryDeadline, (s) =>
       processSource(s, workId, queries, titles, retryDeadline),
     )
       .then(() => pruneDuplicateLinks(workId))
@@ -545,30 +587,100 @@ async function doResolveSourcesForWork(
   }
 }
 
-// Detached native-scraper pass, one at a time per work so a second click never
-// doubles the FlareSolverr load.
+async function runScraper(
+  scraper: (typeof SCRAPERS)[number],
+  workId: number,
+  queries: string[],
+  titles: string[],
+  ref: { origin: string; externalId: string },
+  timeoutMs: number,
+): Promise<void> {
+  const started = Date.now();
+  try {
+    await withTimeout(processScraper(scraper, workId, queries, titles, ref), timeoutMs);
+    recordOk(scraper.id, Date.now() - started);
+  } catch {
+    recordFail(scraper.id);
+  }
+}
+
+// Plain-HTTP sources (no challenge solver): fast enough to run inline.
+async function runFastScrapers(
+  workId: number,
+  queries: string[],
+  titles: string[],
+  ref: { origin: string; externalId: string },
+): Promise<void> {
+  const scrapers = SCRAPERS.filter(
+    (s) => !s.heavy && PREFERRED_LANGS.has(normLang(s.lang)) && !isMuted(s.id),
+  );
+  if (!scrapers.length) return;
+  await Promise.allSettled(
+    scrapers.map((s) => runScraper(s, workId, queries, titles, ref, FAST_SCRAPER_TIMEOUT)),
+  );
+}
+
+// Detached solver-backed pass, one at a time per work so a second click never
+// doubles the browser load.
 const scraperLanes = new Set<number>();
 
-function runScraperLane(workId: number, queries: string[], titles: string[]): void {
+function runScraperLane(
+  workId: number,
+  queries: string[],
+  titles: string[],
+  ref: { origin: string; externalId: string },
+): void {
   if (scraperLanes.has(workId)) return;
-  const scrapers = SCRAPERS.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)) && !isMuted(s.id));
+  const scrapers = SCRAPERS.filter(
+    (s) => s.heavy && PREFERRED_LANGS.has(normLang(s.lang)) && !isMuted(s.id),
+  );
   if (!scrapers.length) return;
   scraperLanes.add(workId);
   void Promise.allSettled(
-    scrapers.map(async (s) => {
-      const started = Date.now();
-      try {
-        await withTimeout(processScraper(s, workId, queries, titles), SCRAPER_TIMEOUT);
-        recordOk(s.id, Date.now() - started);
-      } catch {
-        recordFail(s.id);
-      }
-    }),
+    scrapers.map((s) => runScraper(s, workId, queries, titles, ref, SCRAPER_TIMEOUT)),
   )
     .then(() => pruneDuplicateLinks(workId))
     .then(() => promotePrimary(workId))
     .catch(() => {})
     .finally(() => scraperLanes.delete(workId));
+}
+
+// Same scan reachable two ways (a native scraper and a Suwayomi extension for
+// the same site) collapses onto one entry, keyed by the manga URL.
+const UUID_IN_PATH = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function dedupeKey(l: { sourceId: string; url: string | null; lang: string | null }): string {
+  const raw = (l.url || "").trim().toLowerCase();
+  const lang = normLang(l.lang) || "-";
+  if (!raw) return `src:${l.sourceId}:${lang}`;
+  try {
+    const u = new URL(raw);
+    const host = u.host.replace(/^www\./, "");
+    // A slug tail differs between the engine's URL and ours for the same entry,
+    // so an id in the path identifies the manga better than the whole path.
+    const id = u.pathname.match(UUID_IN_PATH)?.[0];
+    const path = id ?? u.pathname.replace(/\/+$/, "");
+    return `url:${host}${path}:${lang}`;
+  } catch {
+    return `src:${l.sourceId}:${lang}`;
+  }
+}
+
+type PrunableLink = {
+  id: number;
+  sourceId: string;
+  kind: string;
+  url: string | null;
+  lang: string | null;
+  chapterCount: number;
+  healthScore: number;
+};
+
+// A native link keeps working when the engine is down, so it wins ties.
+function better(a: PrunableLink, b: PrunableLink): boolean {
+  if (a.chapterCount !== b.chapterCount) return a.chapterCount > b.chapterCount;
+  if (a.kind !== b.kind) return a.kind === "scraper";
+  return a.healthScore > b.healthScore;
 }
 
 // Collapses several links from the same source onto the richest one. Repairs
@@ -577,21 +689,42 @@ async function pruneDuplicateLinks(workId: number): Promise<void> {
   try {
     const links = await prisma.sourceLink.findMany({
       where: { workId },
-      select: { id: true, sourceId: true, chapterCount: true, healthScore: true },
+      select: {
+        id: true,
+        sourceId: true,
+        kind: true,
+        url: true,
+        lang: true,
+        chapterCount: true,
+        healthScore: true,
+      },
     });
-    const keep = new Map<string, { id: number; chapterCount: number; healthScore: number }>();
+    const keep = new Map<string, PrunableLink>();
     const drop: number[] = [];
-    for (const l of links) {
-      const cur = keep.get(l.sourceId);
+    const push = (key: string, l: PrunableLink) => {
+      const cur = keep.get(key);
       if (!cur) {
-        keep.set(l.sourceId, l);
+        keep.set(key, l);
+        return;
+      }
+      if (better(l, cur)) {
+        keep.set(key, l);
+        drop.push(cur.id);
+      } else {
+        drop.push(l.id);
+      }
+    };
+    for (const l of links) push(`src:${l.sourceId}`, l);
+    const byUrl = new Map<string, PrunableLink>();
+    for (const l of keep.values()) {
+      const key = dedupeKey(l);
+      const cur = byUrl.get(key);
+      if (!cur) {
+        byUrl.set(key, l);
         continue;
       }
-      const better =
-        l.chapterCount > cur.chapterCount ||
-        (l.chapterCount === cur.chapterCount && l.healthScore > cur.healthScore);
-      if (better) {
-        keep.set(l.sourceId, l);
+      if (better(l, cur)) {
+        byUrl.set(key, l);
         drop.push(cur.id);
       } else {
         drop.push(l.id);
@@ -738,16 +871,14 @@ export async function resolveWorkFromRef(
       let best: BackboneWork | null = null;
       let bestScore = 0;
       for (const c of cands) {
-        const s = Math.max(
-          titleSimilarity(title, c.title),
-          ...c.altTitles.map((t) => titleSimilarity(title, t)),
-        );
+        const s = matchScore(title, [c.title, ...c.altTitles]);
         if (s > bestScore) {
           bestScore = s;
           best = c;
         }
       }
-      if (best && bestScore >= MATCH_THRESHOLD) bw = best;
+      if (best && bestScore >= MATCH_THRESHOLD && isMatch(bestScore, title, [best.title, ...best.altTitles]))
+        bw = best;
       if (!bw) {
         bw = {
           origin: "comick",

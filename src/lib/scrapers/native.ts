@@ -55,9 +55,15 @@ export async function syncNativeChapters(link: {
         chapterKey: c.key,
         name: c.name,
         number: c.number,
+        scanlator: c.scanlator ?? null,
         uploadDate: c.date ? new Date(c.date) : null,
       },
-      update: { name: c.name, number: c.number, uploadDate: c.date ? new Date(c.date) : null },
+      update: {
+        name: c.name,
+        number: c.number,
+        scanlator: c.scanlator ?? null,
+        uploadDate: c.date ? new Date(c.date) : null,
+      },
     });
   }
   return { count: chapters.length, latestMs };
@@ -73,7 +79,7 @@ export async function getNativeChapters(linkId: number): Promise<NativeChapterRo
     id: NATIVE_OFFSET + r.id,
     name: r.name,
     chapterNumber: r.number,
-    scanlator: null,
+    scanlator: r.scanlator ?? null,
     uploadDate: r.uploadDate ? String(r.uploadDate.getTime()) : null,
   }));
 }

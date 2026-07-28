@@ -111,5 +111,14 @@ export function createMadara(cfg: MadaraConfig): Scraper {
     return urls;
   }
 
-  return { id: cfg.id, name: cfg.name, lang: cfg.lang, base: cfg.base, search, chapters, pages };
+  return {
+    id: cfg.id,
+    name: cfg.name,
+    lang: cfg.lang,
+    base: cfg.base,
+    heavy: true,
+    search,
+    chapters,
+    pages,
+  };
 }
