@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { BookOpen, Check } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { getWorkWithLinks, resolveSourcesForWork } from "@/lib/backbone/resolve";
+import { getWorkWithLinks, resolveSourcesForWork, waitForLinks } from "@/lib/backbone/resolve";
 import { getMangaEnsured, getChapters } from "@/lib/suwayomi";
 import { getNativeChapters } from "@/lib/scrapers/native";
 import {
@@ -26,7 +26,7 @@ export const dynamic = "force-dynamic";
 const DAY_MS = 86_400_000;
 // How long a first-time source resolve may block the request before the page
 // paints; the resolve keeps running in the background past this budget.
-const RESOLVE_BUDGET_MS = 5_000;
+const RESOLVE_BUDGET_MS = 3_500;
 
 function cap(s?: string | null): string {
   if (!s) return "";
@@ -211,10 +211,13 @@ async function SourcesAndChapters({
       // Existing sources still render; refresh them off the request path.
       void resolving;
     } else {
-      // First open: block only briefly so the page paints instead of hanging on
-      // dead sources' timeouts. The resolve finishes in the background (coalesced)
-      // and <ResolvingSources> auto-refreshes until chapters land.
-      await Promise.race([resolving, new Promise((r) => setTimeout(r, RESOLVE_BUDGET_MS))]);
+      // First open: release the page the moment the first usable link lands
+      // instead of waiting out the sweep. The rest keeps resolving in the
+      // background (coalesced) and <ResolvingSources> polls until it shows up.
+      await Promise.race([
+        resolving,
+        waitForLinks(workId, { minLinks: 1, timeoutMs: RESOLVE_BUDGET_MS }),
+      ]);
       data = await getWorkWithLinks(workId);
     }
   }

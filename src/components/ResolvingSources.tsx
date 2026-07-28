@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-const INTERVAL_MS = 3_500;
-const MAX_TRIES = 6;
+const INTERVAL_MS = 1_200;
+const MAX_TRIES = 20;
 
 // Sources resolve in the background on first open; poll the route until they
 // land so chapters appear on their own instead of a blank waiting screen.

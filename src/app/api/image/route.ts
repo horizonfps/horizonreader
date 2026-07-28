@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { scraperHosts } from "@/lib/scrapers";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
+import { getDiskImage, setDiskImage } from "@/lib/diskCache";
 
 export const runtime = "nodejs";
 
@@ -11,6 +12,38 @@ const UA =
 
 // Only Suwayomi image endpoints (covers and pages) are proxyable.
 const SUWAYOMI_IMAGE_PATH = /^\/api\/v1\/manga\/\d+\/(thumbnail|chapter\/\d+\/page\/\d+)(\?.*)?$/;
+
+// A scan source dropping one request is routine; a page that fails once used to
+// stay blank for the whole session.
+const ATTEMPTS = 3;
+const RETRY_BASE_MS = 250;
+const UPSTREAM_TIMEOUT_MS = 20_000;
+
+const IMMUTABLE = "private, max-age=31536000, immutable";
+const REVALIDATE = "private, max-age=86400";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Never follow redirects: a whitelisted host answering 30x must not steer the
+// server-side fetch to an internal target.
+async function fetchUpstream(target: string, headers?: Record<string, string>) {
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const res = await fetch(target, {
+      cache: "no-store",
+      redirect: "manual",
+      headers,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    }).catch(() => null);
+    if (res && res.status === 200 && res.body) return res;
+    // 4xx other than rate limiting is a real answer; retrying only burns time.
+    if (res && res.status !== 429 && res.status >= 400 && res.status < 500) return res;
+    if (attempt < ATTEMPTS - 1) await sleep(RETRY_BASE_MS * 2 ** attempt);
+    else return res;
+  }
+  return null;
+}
 
 // Streams Suwayomi covers/pages and native-scraper page images through the app.
 // Session required; only Suwayomi paths and whitelisted scraper hosts are allowed
@@ -45,39 +78,45 @@ export async function GET(req: NextRequest) {
     target = BASE + path;
   }
 
-  // Thumbnails are small and hit constantly (library/work grids); pages stream.
-  const cacheable = !ext && path.includes("/thumbnail");
-  if (cacheable) {
-    const hit = getCachedImage(target);
-    if (hit) {
-      return new NextResponse(new Uint8Array(hit.body), {
+  // Chapter pages never change, so they get the disk tier and an immutable
+  // header. Thumbnails stay memory-only, since a source may swap a cover.
+  const isPage = !!ext || path.includes("/chapter/");
+  const cacheControl = isPage ? IMMUTABLE : REVALIDATE;
+
+  const hot = getCachedImage(target);
+  if (hot) {
+    return new NextResponse(new Uint8Array(hot.body), {
+      status: 200,
+      headers: { "content-type": hot.contentType, "cache-control": cacheControl },
+    });
+  }
+
+  if (isPage) {
+    const cold = await getDiskImage(target);
+    if (cold) {
+      setCachedImage(target, cold.body, cold.contentType);
+      return new NextResponse(new Uint8Array(cold.body), {
         status: 200,
-        headers: { "content-type": hit.contentType, "cache-control": "private, max-age=86400" },
+        headers: { "content-type": cold.contentType, "cache-control": cacheControl },
       });
     }
   }
 
-  // Never follow redirects: a whitelisted host answering 30x must not steer the
-  // server-side fetch to an internal target.
-  const upstream = await fetch(target, {
-    cache: "no-store",
-    redirect: "manual",
-    headers: referer ? { "User-Agent": UA, Referer: referer } : undefined,
-  }).catch(() => null);
+  const upstream = await fetchUpstream(
+    target,
+    referer ? { "User-Agent": UA, Referer: referer } : undefined,
+  );
   if (!upstream || upstream.status !== 200 || !upstream.body) {
     return new NextResponse(null, { status: upstream?.status || 502 });
   }
 
-  const headers = new Headers();
-  const ct = upstream.headers.get("content-type");
-  if (ct) headers.set("content-type", ct);
-  headers.set("cache-control", "private, max-age=86400");
+  const ct = upstream.headers.get("content-type") || "application/octet-stream";
+  const body = new Uint8Array(await upstream.arrayBuffer());
+  setCachedImage(target, body, ct);
+  if (isPage) void setDiskImage(target, body, ct);
 
-  if (cacheable) {
-    const body = new Uint8Array(await upstream.arrayBuffer());
-    setCachedImage(target, body, ct || "application/octet-stream");
-    return new NextResponse(body, { status: 200, headers });
-  }
-
-  return new NextResponse(upstream.body, { status: 200, headers });
+  return new NextResponse(body, {
+    status: 200,
+    headers: { "content-type": ct, "cache-control": cacheControl },
+  });
 }

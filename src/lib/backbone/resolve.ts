@@ -6,6 +6,7 @@ import type { BackboneWork } from "@/lib/backbone/types";
 import { norm, matchKeys, slugify, titleSimilarity } from "@/lib/backbone/normalize";
 import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
+import { isMuted, partitionByHealth, recordFail, recordOk } from "@/lib/backbone/sourceStats";
 import {
   searchMangaDex,
   getMangaDexManga,
@@ -29,8 +30,14 @@ const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 const DAY_MS = 86_400_000;
 const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
-const SOURCE_TIMEOUT = 8_000;
-const SCRAPER_TIMEOUT = 90_000;
+const SOURCE_TIMEOUT = 6_000;
+const SCRAPER_TIMEOUT = 45_000;
+// Hard ceiling on the whole Suwayomi sweep. Without it the pass lasts as long
+// as the slowest extension, which is where the multi-minute waits came from.
+const SWEEP_DEADLINE_MS = 20_000;
+// Suwayomi answers searches concurrently; the old serial-ish pass left the
+// engine idle while the request waited on timeouts.
+const SEARCH_CONCURRENCY = 24;
 // Combined token_set + token_sort floor. Lower than the old token_set-only 0.88
 // because the new metric is stricter (a subset title no longer scores 1.0).
 const MATCH_THRESHOLD = 0.8;
@@ -94,6 +101,27 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       },
     );
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Bounded-concurrency worker pool that stops handing out work past a deadline.
+async function runPool<T>(
+  items: T[],
+  limit: number,
+  deadline: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length && Date.now() < deadline) {
+      const item = items[next++];
+      await fn(item).catch(() => {});
+    }
+  });
+  await Promise.all(workers);
 }
 
 function descriptiveData(bw: BackboneWork) {
@@ -255,6 +283,23 @@ async function syncMatch(source: SuwayomiSource, workId: number, result: Suwayom
   }
 }
 
+// One source carries one edition of a work, so only the single best candidate
+// may be linked. Syncing every result over the threshold was what put the same
+// site on the page four or five times.
+function bestCandidate(mangas: SuwayomiManga[], titles: string[]): SuwayomiManga | null {
+  let best: SuwayomiManga | null = null;
+  let bestScore = 0;
+  for (const result of mangas.slice(0, 5)) {
+    let score = 0;
+    for (const t of titles) score = Math.max(score, titleSimilarity(result.title, t));
+    if (score > bestScore) {
+      bestScore = score;
+      best = result;
+    }
+  }
+  return bestScore >= MATCH_THRESHOLD ? best : null;
+}
+
 async function searchAndMatch(
   source: SuwayomiSource,
   workId: number,
@@ -262,16 +307,10 @@ async function searchAndMatch(
   titles: string[],
 ): Promise<boolean> {
   const { mangas } = await browseSource(source.id, "SEARCH", 1, query);
-  let matched = false;
-  for (const result of (mangas ?? []).slice(0, 5)) {
-    let best = 0;
-    for (const t of titles) best = Math.max(best, titleSimilarity(result.title, t));
-    if (best >= MATCH_THRESHOLD) {
-      await syncMatch(source, workId, result);
-      matched = true;
-    }
-  }
-  return matched;
+  const match = bestCandidate(mangas ?? [], titles);
+  if (!match) return false;
+  await syncMatch(source, workId, match);
+  return true;
 }
 
 async function processSource(
@@ -279,16 +318,28 @@ async function processSource(
   workId: number,
   queries: string[],
   titles: string[],
+  deadline: number,
 ) {
-  try {
-    // Try each query in order (English first, then localized alt titles) until a
-    // match lands. pt-BR scan sites index by the Portuguese title, so an English
-    // query alone misses them.
-    for (const query of queries) {
-      if (await searchAndMatch(source, workId, query, titles)) return;
+  // Try each query in order (English first, then localized alt titles) until a
+  // match lands. pt-BR scan sites index by the Portuguese title, so an English
+  // query alone misses them. Each query gets its own budget instead of sharing
+  // one, and latency/failures feed the health memory.
+  for (const query of queries) {
+    const started = Date.now();
+    const budget = Math.min(SOURCE_TIMEOUT, deadline - started);
+    // Too little left to judge the source fairly; leave it for the next pass.
+    if (budget < 1_500) return;
+    try {
+      const hit = await withTimeout(searchAndMatch(source, workId, query, titles), budget);
+      recordOk(source.id, Date.now() - started);
+      if (hit) return;
+    } catch (e) {
+      // A source cut short by the sweep deadline is not unhealthy; one that
+      // burned its own budget or errored outright is.
+      const timedOut = e instanceof Error && e.message === "timeout";
+      if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
+      return;
     }
-  } catch (e) {
-    console.warn(`[resolve] processSource failed (source ${source.id})`, e);
   }
 }
 
@@ -377,7 +428,7 @@ export function resolveSourcesForWork(
 
 // Background lane for prefetch warms: low concurrency plus a per-work cooldown
 // so viewport warming never saturates Suwayomi/DB and slows real clicks.
-const BG_CONCURRENCY = 2;
+const BG_CONCURRENCY = 6;
 const BG_COOLDOWN_MS = 3_600_000;
 const bgQueue: number[] = [];
 const bgQueued = new Set<number>();
@@ -467,35 +518,125 @@ async function doResolveSourcesForWork(
   const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
   const targets = wanted.length ? wanted : sources;
 
-  const nativeScrapers = SCRAPERS.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
+  // Native scrapers route through FlareSolverr and cost tens of seconds, so they
+  // run detached: the page never waits on them, and their links show up on the
+  // next poll. Muted sources are swept after the healthy ones, off the clock.
+  runScraperLane(workId, queries, titles);
 
-  await Promise.allSettled([
-    ...targets.map((s) =>
-      withTimeout(processSource(s, workId, queries, titles), SOURCE_TIMEOUT).catch(() => {}),
-    ),
-    // Native scrapers may route through FlareSolverr, so give them more headroom.
-    ...nativeScrapers.map((s) =>
-      withTimeout(processScraper(s, workId, queries, titles), SCRAPER_TIMEOUT).catch(() => {}),
-    ),
-  ]);
+  const { live, muted } = partitionByHealth(targets);
+  const deadline = Date.now() + SWEEP_DEADLINE_MS;
+  await runPool(live, SEARCH_CONCURRENCY, deadline, (s) =>
+    processSource(s, workId, queries, titles, deadline),
+  );
 
-  // Promote the healthiest link to primary.
+  await pruneDuplicateLinks(workId);
+  await promotePrimary(workId);
+
+  if (muted.length) {
+    // Muted sources still get a full pass, just never in front of the reader:
+    // it is how a recovered source earns its way back into the fast lane.
+    const retryDeadline = Date.now() + SWEEP_DEADLINE_MS;
+    void runPool(muted, SEARCH_CONCURRENCY, retryDeadline, (s) =>
+      processSource(s, workId, queries, titles, retryDeadline),
+    )
+      .then(() => pruneDuplicateLinks(workId))
+      .then(() => promotePrimary(workId))
+      .catch(() => {});
+  }
+}
+
+// Detached native-scraper pass, one at a time per work so a second click never
+// doubles the FlareSolverr load.
+const scraperLanes = new Set<number>();
+
+function runScraperLane(workId: number, queries: string[], titles: string[]): void {
+  if (scraperLanes.has(workId)) return;
+  const scrapers = SCRAPERS.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)) && !isMuted(s.id));
+  if (!scrapers.length) return;
+  scraperLanes.add(workId);
+  void Promise.allSettled(
+    scrapers.map(async (s) => {
+      const started = Date.now();
+      try {
+        await withTimeout(processScraper(s, workId, queries, titles), SCRAPER_TIMEOUT);
+        recordOk(s.id, Date.now() - started);
+      } catch {
+        recordFail(s.id);
+      }
+    }),
+  )
+    .then(() => pruneDuplicateLinks(workId))
+    .then(() => promotePrimary(workId))
+    .catch(() => {})
+    .finally(() => scraperLanes.delete(workId));
+}
+
+// Collapses several links from the same source onto the richest one. Repairs
+// works already polluted by the old multi-match behaviour.
+async function pruneDuplicateLinks(workId: number): Promise<void> {
+  try {
+    const links = await prisma.sourceLink.findMany({
+      where: { workId },
+      select: { id: true, sourceId: true, chapterCount: true, healthScore: true },
+    });
+    const keep = new Map<string, { id: number; chapterCount: number; healthScore: number }>();
+    const drop: number[] = [];
+    for (const l of links) {
+      const cur = keep.get(l.sourceId);
+      if (!cur) {
+        keep.set(l.sourceId, l);
+        continue;
+      }
+      const better =
+        l.chapterCount > cur.chapterCount ||
+        (l.chapterCount === cur.chapterCount && l.healthScore > cur.healthScore);
+      if (better) {
+        keep.set(l.sourceId, l);
+        drop.push(cur.id);
+      } else {
+        drop.push(l.id);
+      }
+    }
+    if (drop.length) await prisma.sourceLink.deleteMany({ where: { id: { in: drop } } });
+  } catch (e) {
+    console.warn(`[resolve] pruneDuplicateLinks failed (work ${workId})`, e);
+  }
+}
+
+async function promotePrimary(workId: number): Promise<void> {
   try {
     const links = await prisma.sourceLink.findMany({
       where: { workId },
       orderBy: { healthScore: "desc" },
       select: { id: true },
     });
-    if (links.length) {
-      const topId = links[0].id;
-      await prisma.sourceLink.updateMany({
-        where: { workId, id: { not: topId } },
-        data: { isPrimary: false },
-      });
-      await prisma.sourceLink.update({ where: { id: topId }, data: { isPrimary: true } });
-    }
+    if (!links.length) return;
+    const topId = links[0].id;
+    await prisma.sourceLink.updateMany({
+      where: { workId, id: { not: topId } },
+      data: { isPrimary: false },
+    });
+    await prisma.sourceLink.update({ where: { id: topId }, data: { isPrimary: true } });
   } catch (e) {
     console.warn(`[resolve] promote primary failed (work ${workId})`, e);
+  }
+}
+
+// Unblocks the work page as soon as the first usable link lands instead of
+// waiting for the whole sweep to settle.
+export async function waitForLinks(
+  workId: number,
+  opts?: { minLinks?: number; timeoutMs?: number },
+): Promise<number> {
+  const min = opts?.minLinks ?? 1;
+  const deadline = Date.now() + (opts?.timeoutMs ?? 4_000);
+  for (;;) {
+    const n = await prisma.sourceLink
+      .count({ where: { workId, chapterCount: { gt: 0 } } })
+      .catch(() => 0);
+    if (n >= min) return n;
+    if (Date.now() >= deadline) return n;
+    await sleep(200);
   }
 }
 
@@ -556,21 +697,31 @@ function coerceStatus(s?: string | null): BackboneWork["status"] {
 
 // Resolve a backbone list item to a local canonical Work. MangaDex items resolve
 // by id; Comick items canonicalize onto MangaDex by title, else persist as-is.
+// Fast path for a card click: any known Work resolves straight from the DB.
+// Staleness is refreshed off the click path, never in front of the redirect.
+export async function lookupRefSlug(
+  ref: Pick<WorkRef, "origin" | "externalId">,
+): Promise<{ workId: number; slug: string; stale: boolean } | null> {
+  const row = await prisma.work
+    .findUnique({
+      where: { origin_externalId: { origin: ref.origin, externalId: ref.externalId } },
+      select: { id: true, slug: true, updatedAt: true },
+    })
+    .catch(() => null);
+  if (!row) return null;
+  return {
+    workId: row.id,
+    slug: row.slug,
+    stale: Date.now() - row.updatedAt.getTime() >= REF_FRESH_MS,
+  };
+}
+
 export async function resolveWorkFromRef(
   ref: WorkRef,
 ): Promise<{ workId: number; slug: string } | null> {
   try {
-    // A recently refreshed Work resolves straight from the DB, skipping the
-    // backbone fetch + upsert on every card click.
-    const cached = await prisma.work
-      .findUnique({
-        where: { origin_externalId: { origin: ref.origin, externalId: ref.externalId } },
-        select: { id: true, slug: true, updatedAt: true },
-      })
-      .catch(() => null);
-    if (cached && Date.now() - cached.updatedAt.getTime() < REF_FRESH_MS) {
-      return { workId: cached.id, slug: cached.slug };
-    }
+    const cached = await lookupRefSlug(ref);
+    if (cached && !cached.stale) return { workId: cached.workId, slug: cached.slug };
 
     let bw: BackboneWork | null = null;
 
@@ -578,22 +729,25 @@ export async function resolveWorkFromRef(
       bw = await getMangaDexManga(ref.externalId);
     } else {
       const title = (ref.title || "").trim();
-      if (title) {
-        const cands = await searchMangaDex(title, 6);
-        let best: BackboneWork | null = null;
-        let bestScore = 0;
-        for (const c of cands) {
-          const s = Math.max(
-            titleSimilarity(title, c.title),
-            ...c.altTitles.map((t) => titleSimilarity(title, t)),
-          );
-          if (s > bestScore) {
-            bestScore = s;
-            best = c;
-          }
+      // MangaDex canonicalization and the Comick policy lookup are independent;
+      // running them together halves the cold-open latency.
+      const [cands, info] = await Promise.all([
+        title ? searchMangaDex(title, 6).catch(() => []) : Promise.resolve([]),
+        getComickContentInfo(ref.externalId).catch(() => null),
+      ]);
+      let best: BackboneWork | null = null;
+      let bestScore = 0;
+      for (const c of cands) {
+        const s = Math.max(
+          titleSimilarity(title, c.title),
+          ...c.altTitles.map((t) => titleSimilarity(title, t)),
+        );
+        if (s > bestScore) {
+          bestScore = s;
+          best = c;
         }
-        if (best && bestScore >= MATCH_THRESHOLD) bw = best;
       }
+      if (best && bestScore >= MATCH_THRESHOLD) bw = best;
       if (!bw) {
         bw = {
           origin: "comick",
@@ -605,19 +759,15 @@ export async function resolveWorkFromRef(
           status: coerceStatus(ref.status),
         };
       }
-    }
-
-    if (!bw) return null;
-
-    // A Comick-only ref (no MangaDex canonicalization) carries no genre/rating in
-    // the URL, so fetch Comick detail by hid before the policy guard below.
-    if (bw.origin === "comick") {
-      const info = await getComickContentInfo(ref.externalId);
-      if (info) {
+      // A Comick-only ref carries no genre/rating in the URL, so the detail
+      // fetched above feeds the policy guard below.
+      if (bw.origin === "comick" && info) {
         bw.genres = info.genres;
         bw.contentRating = info.contentRating;
       }
     }
+
+    if (!bw) return null;
 
     // Content policy: never resolve/open NSFW or BL-GL works, even via a direct link.
     if (isBlocked({ genres: bw.genres, contentRating: bw.contentRating })) return null;

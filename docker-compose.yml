@@ -13,6 +13,11 @@ services:
       FLARESOLVERR_URL: http://flaresolverr:8191
       # Uploaded avatars/banners live on the mounted data volume.
       UPLOAD_DIR: /data/uploads
+      # Chapter pages are immutable, so they are served from disk after the
+      # first fetch. Sized for the VPS, not for a laptop.
+      IMAGE_CACHE_DIR: /data/imgcache
+      IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-8192}
+      IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-512}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
     volumes:

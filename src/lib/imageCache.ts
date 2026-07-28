@@ -1,8 +1,8 @@
-// Byte-capped in-memory LRU for proxied images (covers/thumbnails), so repeat
-// views skip the upstream fetch entirely.
+// Byte-capped in-memory LRU for proxied images, so repeat views skip the
+// upstream fetch entirely. Backed by [[diskCache]] for anything that misses.
 
-const MAX_BYTES = 64 * 1024 * 1024;
-const MAX_ENTRY_BYTES = 512 * 1024;
+const MAX_BYTES = Number(process.env.IMAGE_CACHE_MEM_MB || 512) * 1024 * 1024;
+const MAX_ENTRY_BYTES = 16 * 1024 * 1024;
 const TTL = 7 * 24 * 60 * 60 * 1000;
 
 type Entry = { body: Uint8Array; contentType: string; at: number };

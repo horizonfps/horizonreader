@@ -21,6 +21,94 @@ type Props = {
 };
 
 const SETTINGS_KEY = "reader:settings";
+const MAX_RETRIES = 4;
+const RETRY_BASE_MS = 500;
+// Pages pulled ahead of the viewport so scrolling doesn't wait on the network.
+const PRELOAD_AHEAD = 4;
+
+function retryUrl(url: string, attempt: number): string {
+  if (attempt === 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}_r=${attempt}`;
+}
+
+// A dropped page used to leave a black gap for the rest of the session: the
+// <img> had no error path. Retries with backoff, then offers a manual reload.
+function PageImage({
+  url,
+  eager,
+  onFirstLoad,
+  className,
+  wrapperClassName,
+}: {
+  url: string;
+  eager: boolean;
+  onFirstLoad?: () => void;
+  className: string;
+  wrapperClassName?: string;
+}) {
+  const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  const onError = () => {
+    if (attempt >= MAX_RETRIES) {
+      setFailed(true);
+      return;
+    }
+    const delay = RETRY_BASE_MS * 2 ** attempt;
+    timer.current = setTimeout(() => setAttempt((a) => a + 1), delay);
+  };
+
+  const reload = () => {
+    setFailed(false);
+    setAttempt((a) => a + 1);
+  };
+
+  return (
+    <div className={`relative ${wrapperClassName ?? ""}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={attempt}
+        src={retryUrl(url, attempt)}
+        alt=""
+        loading={eager ? "eager" : "lazy"}
+        decoding="async"
+        onLoad={() => {
+          setLoaded(true);
+          onFirstLoad?.();
+        }}
+        onError={onError}
+        className={className}
+      />
+      {!loaded && !failed ? (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span className="h-6 w-6 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
+        </div>
+      ) : null}
+      {failed ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/40 text-sm text-white/80">
+          <span>Não foi possível carregar esta página.</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              reload();
+            }}
+            className="rounded-lg bg-white/15 px-3 py-1.5 text-xs backdrop-blur"
+          >
+            Tentar de novo
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export default function Reader({
   chapterId,
@@ -178,6 +266,16 @@ export default function Reader({
     armedRef.current = true;
   }, [initialPage]);
 
+  // Warm the pages just ahead of the viewport so scrolling lands on a decoded
+  // image instead of a network round trip.
+  useEffect(() => {
+    for (let i = page + 1; i <= page + PRELOAD_AHEAD && i < total; i++) {
+      const img = new window.Image();
+      img.decoding = "async";
+      img.src = pageUrls[i];
+    }
+  }, [page, total, pageUrls]);
+
   const goNextPage = useCallback(() => {
     setPage((p) => {
       if (p >= total - 1) {
@@ -248,12 +346,11 @@ export default function Reader({
                 }}
                 style={{ minHeight: "60vh" }}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt=""
-                  loading={i < 3 ? "eager" : "lazy"}
-                  onLoad={i === initialPage ? settleResume : undefined}
+                <PageImage
+                  url={url}
+                  eager={i <= Math.max(initialPage, 0) + 2}
+                  onFirstLoad={i === initialPage ? settleResume : undefined}
+                  wrapperClassName="min-h-[60vh]"
                   className="block w-full select-none"
                 />
               </div>
@@ -275,15 +372,14 @@ export default function Reader({
       ) : (
         <div className="h-full w-full" onClick={onTapZones}>
           <div className="flex h-full w-full items-center justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={pageUrls[page]} alt="" className="max-h-full max-w-full select-none object-contain" />
+            <PageImage
+              key={page}
+              url={pageUrls[page]}
+              eager
+              wrapperClassName="flex h-full w-full items-center justify-center"
+              className="max-h-full max-w-full select-none object-contain"
+            />
           </div>
-          {[page + 1, page + 2, page - 1]
-            .filter((i) => i >= 0 && i < total)
-            .map((i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={pageUrls[i]} alt="" className="hidden" />
-            ))}
         </div>
       )}
 
