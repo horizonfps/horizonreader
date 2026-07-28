@@ -12,6 +12,19 @@ export const runtime = "nodejs";
 
 const TOKEN = process.env.SOLVER_PROXY_TOKEN || "";
 
+// Suwayomi drops the call at its own flareSolverrTimeout and logs a stack
+// trace; a solve that lands after that only burned a browser context. The
+// caller's maxTimeout is the budget, minus the room to send the answer back.
+const CALLER_GRACE_MS = 5_000;
+const MAX_BUDGET_MS = Number(process.env.SOLVER_PROXY_BUDGET_MS || 60_000);
+const MIN_BUDGET_MS = 15_000;
+
+function budgetFrom(raw: unknown): number {
+  const asked = Number(raw);
+  const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_BUDGET_MS) : MAX_BUDGET_MS;
+  return Math.max(MIN_BUDGET_MS, limit - CALLER_GRACE_MS);
+}
+
 // Never let a caller aim the solver at the private network.
 const PRIVATE_HOST =
   /^(localhost|127\.|0\.|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/i;
@@ -39,7 +52,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ token: str
   if (!TOKEN || token !== TOKEN) return NextResponse.json({ error: "not_found" }, { status: 404 });
   if (!flareEnabled()) return fail("no solver configured", 503);
 
-  let body: { cmd?: string; url?: string; postData?: string };
+  let body: { cmd?: string; url?: string; postData?: string; maxTimeout?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -65,7 +78,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ token: str
   if (PRIVATE_HOST.test(host)) return fail("host not allowed", 400);
 
   try {
-    const html = await flareSolve(cmd, target, cmd === "request.post" ? body.postData : undefined);
+    const html = await flareSolve(cmd, target, cmd === "request.post" ? body.postData : undefined, {
+      budgetMs: budgetFrom(body.maxTimeout),
+      signal: req.signal,
+    });
     const clearance = getClearance(target);
     return ok({
       solution: {

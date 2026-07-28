@@ -39,9 +39,23 @@ const KEYED_LEVEL = /(?:"level"\s*:\s*"|level=)(\w+)/i;
 const ERROR_HINT =
   /(exception|traceback|panic:|stack trace|unhandled|segmentation fault|out of memory|oomkill|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOSPC|EACCES|failed to |cannot connect|could not connect|no such file|permission denied|connection refused|⨯)/i;
 const WARN_HINT = /(deprecat|retrying|timed out|timeout|slow query|⚠)/i;
+// Chromium's push/GCM stack chatters from inside the engine image on every
+// start and says nothing about scraping.
+const NOISE = /ERROR:google_apis\/gcm\/|ConnectionHandler failed with net error/;
+// A stack trace belongs to the error above it. Counted on its own, a single
+// failure reads as a dozen and crowds everything else out of the panel.
+const CONTINUATION = [
+  /^\s+at\s+\S/,
+  /^\s*(Caused by|Suppressed):/,
+  /^\s*\.\.\.\s+\d+\s+(more|common frames omitted)/,
+  /^\s+File ".+", line \d+/,
+  /^Traceback \(most recent call last\)/,
+  /^[\w$]+(\.[\w$]+)+(Exception|Error|Throwable)(:|$)/,
+];
 
 function levelOf(message: string): LogLevel {
   const head = message.slice(0, 140);
+  if (NOISE.test(head)) return "debug";
   const keyed = head.match(KEYED_LEVEL)?.[1] || head.match(LEVEL_TOKEN)?.[1];
   switch (keyed?.toUpperCase()) {
     case "ERROR":
@@ -75,6 +89,19 @@ function parse(container: string, chunks: { stream: "stdout" | "stderr"; text: s
       const stamp = line.match(TIMESTAMP);
       const message = stamp ? line.slice(stamp[0].length) : line;
       if (!message.trim()) continue;
+
+      const previous = entries[entries.length - 1];
+      if (
+        previous &&
+        previous.stream === chunk.stream &&
+        previous.level !== "info" &&
+        previous.level !== "debug" &&
+        CONTINUATION.some((re) => re.test(message))
+      ) {
+        previous.message = `${previous.message}\n${message}`.slice(0, 2_000);
+        continue;
+      }
+
       entries.push({
         container,
         at: stamp?.[1] ?? null,
