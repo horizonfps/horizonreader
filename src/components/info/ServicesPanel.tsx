@@ -38,7 +38,7 @@ function ProbeRow({
 }
 
 export default function ServicesPanel({ services }: { services: ServicesSnapshot }) {
-  const { suwayomi, solvers, tunnel, storage, database, app } = services;
+  const { suwayomi, solvers, front, storage, database, app } = services;
   const cacheUsage = storage.imageCache.budgetBytes
     ? (storage.imageCache.bytes / storage.imageCache.budgetBytes) * 100
     : 0;
@@ -50,7 +50,7 @@ export default function ServicesPanel({ services }: { services: ServicesSnapshot
         {solvers.map((s) => (
           <ProbeRow key={s.name} {...s} />
         ))}
-        <ProbeRow {...tunnel} />
+        <ProbeRow {...front} />
       </Card>
 
       <Card title="Engine (Suwayomi)">

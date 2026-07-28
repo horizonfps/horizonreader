@@ -110,7 +110,7 @@ export default function InfoDashboard() {
   if (services.data) {
     if (!services.data.suwayomi.ok) alerts.push("engine Suwayomi não respondeu");
     for (const solver of services.data.solvers) if (!solver.ok) alerts.push(`solver ${solver.name} offline`);
-    if (!services.data.tunnel.ok) alerts.push("conector do túnel não encontrado no host");
+    if (!services.data.front.ok) alerts.push("nenhum proxy ou túnel encontrado no host");
   }
 
   return (

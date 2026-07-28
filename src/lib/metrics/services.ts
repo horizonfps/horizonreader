@@ -140,15 +140,18 @@ async function solverProbes(): Promise<Probe[]> {
     solverTargets().map(async ({ name, url }) => {
       const base = url.replace(/\/+$/, "");
       const result = await timed(async () => {
+        // Byparr answers /health by driving a real browser, so it can take
+        // several seconds under load without being broken.
         const health = await fetch(`${base}/health`, {
           cache: "no-store",
-          signal: AbortSignal.timeout(6_000),
+          signal: AbortSignal.timeout(15_000),
         }).catch(() => null);
         if (health?.ok) {
           const body = (await health.json().catch(() => ({}))) as Record<string, unknown>;
-          return String(body.version || body.status || "healthy");
+          const version = typeof body.version === "string" ? body.version.slice(0, 12) : null;
+          return version || String(body.status || body.msg || "healthy");
         }
-        const root = (await getJson(base)) as Record<string, unknown>;
+        const root = (await getJson(base, 8_000)) as Record<string, unknown>;
         if (root.version) return `v${root.version}`;
         if (root.msg) return String(root.msg);
         throw new Error(health ? `HTTP ${health.status}` : "sem resposta");
@@ -160,16 +163,25 @@ async function solverProbes(): Promise<Probe[]> {
 
 // ---- tunnel ----
 
-async function tunnelProbe(): Promise<Probe & { pid: number | null }> {
-  const connector = await findHostProcess("cloudflared");
+// The public entrypoint lives on the host, not in the compose stack: it is
+// either a tunnel connector or a reverse proxy, depending on the deploy.
+const FRONTS: Record<string, string> = {
+  cloudflared: "Cloudflare Tunnel",
+  nginx: "nginx",
+  caddy: "Caddy",
+  traefik: "Traefik",
+};
+
+async function frontProbe(): Promise<Probe & { pid: number | null }> {
+  const found = await findHostProcess(Object.keys(FRONTS));
   return {
-    name: "Cloudflare Tunnel",
+    name: "Entrada pública",
     url: null,
-    ok: Boolean(connector),
+    ok: Boolean(found),
     latencyMs: null,
-    detail: connector ? `pid ${connector.pid}` : null,
-    error: connector ? null : "conector cloudflared não encontrado no host",
-    pid: connector?.pid ?? null,
+    detail: found ? `${FRONTS[found.name]} · pid ${found.pid}` : null,
+    error: found ? null : "nenhum proxy ou túnel encontrado no host",
+    pid: found?.pid ?? null,
   };
 }
 
@@ -280,10 +292,10 @@ async function databaseStats() {
 export type ServicesSnapshot = Awaited<ReturnType<typeof readServices>>;
 
 export async function readServices() {
-  const [suwayomi, solvers, tunnel, storage, database] = await Promise.all([
+  const [suwayomi, solvers, front, storage, database] = await Promise.all([
     suwayomiProbe(),
     solverProbes(),
-    tunnelProbe(),
+    frontProbe(),
     storageStats(),
     databaseStats().catch(() => null),
   ]);
@@ -291,7 +303,7 @@ export async function readServices() {
   return {
     suwayomi,
     solvers,
-    tunnel,
+    front,
     storage,
     database,
     app: {

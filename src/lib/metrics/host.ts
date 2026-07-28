@@ -246,17 +246,24 @@ export async function readHost() {
   };
 }
 
-// Host process lookup, used to spot the tunnel connector running outside Docker.
-export async function findHostProcess(name: string): Promise<{ pid: number; cmd: string } | null> {
+// Host process lookup, used to spot whatever fronts the app outside Docker.
+export async function findHostProcess(
+  names: string[],
+): Promise<{ pid: number; name: string; cmd: string } | null> {
   if (!hostProcAvailable) return null;
   const entries = await readdir(PROC).catch(() => null);
   if (!entries) return null;
+  const wanted = new Set(names);
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
-    const comm = await readFile(join(PROC, entry, "comm"), "utf8").catch(() => null);
-    if (!comm || comm.trim() !== name) continue;
+    const comm = (await readFile(join(PROC, entry, "comm"), "utf8").catch(() => ""))?.trim();
+    if (!comm || !wanted.has(comm)) continue;
     const cmdline = await readFile(join(PROC, entry, "cmdline"), "utf8").catch(() => "");
-    return { pid: Number(entry), cmd: cmdline.split("\0").filter(Boolean).slice(0, 3).join(" ") || name };
+    return {
+      pid: Number(entry),
+      name: comm,
+      cmd: cmdline.split("\0").filter(Boolean).slice(0, 3).join(" ") || comm,
+    };
   }
   return null;
 }

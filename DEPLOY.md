@@ -88,6 +88,9 @@ Só admin (`isAdmin`) enxerga; qualquer outra sessão é redirecionada. Mostra C
 RAM, disco, swap, carga, PSI, rede e I/O do host, estatísticas por container,
 saúde do engine e dos solvers, tamanho dos caches e um feed de erros dos logs.
 
+"Entrada pública" procura no host o que publica o app — `cloudflared`, `nginx`,
+`caddy` ou `traefik` — e mostra qual achou. Na VPS quem responde é o nginx.
+
 Depende de três coisas no `docker-compose.yml`, todas já configuradas:
 
 - `/proc:/host/proc:ro` no container `web` — de onde saem os contadores da
