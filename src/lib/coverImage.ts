@@ -10,6 +10,11 @@ function loadSharp(): Promise<SharpModule> {
   return sharpModule;
 }
 
+// Sharp's own pixel ceiling is ~268 Mpx, high enough that a small compressed
+// file can still cost gigabytes of RSS once decoded. Both limits are the guard.
+const MAX_INPUT_BYTES = 12 * 1024 * 1024;
+const MAX_INPUT_PIXELS = 40_000_000;
+
 export async function shrinkCover(
   body: Uint8Array,
   contentType: string,
@@ -18,9 +23,10 @@ export async function shrinkCover(
   if (!contentType.startsWith("image/") || contentType === "image/gif") {
     return { body, contentType };
   }
+  if (body.byteLength > MAX_INPUT_BYTES) return { body, contentType };
   try {
     const { default: sharp } = await loadSharp();
-    const out = await sharp(body)
+    const out = await sharp(body, { limitInputPixels: MAX_INPUT_PIXELS, sequentialRead: true })
       .resize({ width: 360, withoutEnlargement: true })
       .webp({ quality: 72 })
       .toBuffer();
