@@ -5,6 +5,7 @@ import { listMangaDex } from "@/lib/backbone/mangadex";
 import { isBlocked } from "@/lib/backbone/filter";
 import { backboneToCard } from "@/lib/cards";
 import { attachLocalSlugs } from "@/lib/backbone/localslugs";
+import { indexBackboneWorks } from "@/lib/backbone/prewarm";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,7 @@ export async function GET(req: Request) {
       .map(backboneToCard)
       .filter((c) => !isBlocked({ genres: c.genres, contentRating: c.contentRating }));
     await attachLocalSlugs([items]);
+    indexBackboneWorks(works);
     // Page fullness uses the raw fetch count so pagination is not cut short by filtering.
     const nextCursor =
       works.length === PAGE && offset + PAGE <= MAX_OFFSET ? offset + PAGE : null;
