@@ -62,6 +62,12 @@ body {
   }
 }
 
+/* Skip layout/paint for cards outside the viewport in long lists. */
+.card-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
 /* Admin badge (app icon) with hover tooltip. */
 .admin-badge img {
   box-shadow: 0 0 0 1px rgb(var(--accent) / 0.6), 0 0 8px rgb(var(--accent) / 0.45);

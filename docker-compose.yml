@@ -10,25 +10,22 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
       DATABASE_URL: file:/data/app.db
       SUWAYOMI_URL: http://suwayomi:4567
-      # Solver pool, tried in order and remembered per host. trawl escalates
-      # HTTP -> cached session -> Camoufox -> residential proxy and is the
-      # cheapest first try; FlareSolverr owns POST and clears some sites
-      # Byparr misses; Byparr beats the managed challenges FlareSolverr is
-      # fingerprinted on.
-      SOLVERS: ${SOLVERS:-trawl@http://trawl:8191,byparr@http://byparr:8191,flaresolverr@http://flaresolverr:8191}
+      # Solver pool, one engine. trawl escalates HTTP -> cached session (Redis)
+      # -> Camoufox browser -> residential proxy, so most hosts never pay for a
+      # browser boot at all.
+      SOLVERS: ${SOLVERS:-trawl@http://trawl:8191}
       # Shared secret in the path of the solver facade Suwayomi calls.
       SOLVER_PROXY_TOKEN: ${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}
       # Uploaded avatars/banners live on the mounted data volume.
       UPLOAD_DIR: /data/uploads
       # Chapter pages are immutable, so they are served from disk after the
-      # first fetch. Sized for the VPS, not for a laptop.
+      # first fetch. Sized for the local server, not a VPS.
       IMAGE_CACHE_DIR: /data/imgcache
       IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-8192}
       IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-512}
-      # Each concurrent solve is one browser context, so this is the knob that
-      # decides how much CPU/RAM the solver pool can take. Bumped for the
-      # third engine: trawl's first level is a cheap plain GET, not a browser.
-      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-3}
+      # Each concurrent solve is one browser context, so this matches
+      # trawl's own BROWSER_POOL_SIZE.
+      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-2}
       FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-8}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
@@ -94,8 +91,8 @@ services:
       # older builds use EXTENSION_REPOS. Setting both is harmless.
       EXTENSION_STORES: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
       EXTENSION_REPOS: '${EXTENSION_REPOS:-["https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"]}'
-      # Routed through the app's facade so the engine gets both solvers with
-      # fallback instead of the single one this setting can name.
+      # Routed through the app's facade rather than pointing at trawl directly,
+      # so the engine gets the facade's fallback behavior.
       FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-true}"
       FLARESOLVERR_URL: "http://web:3000/api/solver/${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}"
       FLARESOLVERR_TIMEOUT: "60"
@@ -120,20 +117,20 @@ services:
     command: redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
     expose:
       - "6379"
-    mem_limit: ${REDIS_MEM:-256m}
+    mem_limit: ${REDIS_MEM:-128m}
     networks:
       - manga
 
-  # ---- First solver tried: escalates HTTP -> cached session (Redis) ->
+  # ---- Only challenge solver: escalates HTTP -> cached session (Redis) ->
   #      Camoufox browser -> residential proxy, so most hosts never pay for a
-  #      browser boot at all. Speaks the same /v1 endpoint as FlareSolverr and
+  #      browser boot at all. Speaks the FlareSolverr-shaped /v1 endpoint and
   #      answers both request.get and request.post. ----
   trawl:
     image: ghcr.io/germondai/trawl:latest
     container_name: trawl
     restart: unless-stopped
-    # Same reason as byparr: without this, Camoufox/Firefox dies with a
-    # multiprocessing.synchronize error on OCI/LXC hosts.
+    # Without this, Camoufox/Firefox dies with a multiprocessing.synchronize
+    # error on OCI/LXC hosts.
     shm_size: 1gb
     depends_on:
       - redis
@@ -155,71 +152,14 @@ services:
       MITM_PROXY_ENABLED: "false"
     expose:
       - "8191"
-    # Static status endpoint, unlike Byparr's, which drives a real browser.
+    # Static status endpoint; it doesn't drive a real browser per check.
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8191/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 90s
-    mem_limit: ${TRAWL_MEM:-2560m}
-    networks:
-      - manga
-
-  # ---- Cloudflare challenge solver. Byparr drives a stealth-patched Firefox
-  #      and clears the managed challenges that FlareSolverr's chromedriver is
-  #      fingerprinted on. It answers the same /v1 endpoint, GET only. ----
-  #
-  # Pinned to the `main` digest: `latest` is still the v2.1.0 build from
-  # 2026-02, which leaks zombie processes and lacks blockMedia.
-  byparr:
-    image: ghcr.io/thephaseless/byparr:main@sha256:c75576e2a6debaec2ddcb7de5cfb8dcd2a2398c04aa7a3ec0fe14d1bd35584fa
-    container_name: byparr
-    restart: unless-stopped
-    # A fresh browser is launched per request; without this, camoufox dies with
-    # a multiprocessing.synchronize error on OCI/LXC hosts.
-    shm_size: 512mb
-    # Every solve builds a Firefox profile from scratch, which on the overlay
-    # filesystem is both the slowest part of the boot and gigabytes of writes a
-    # day. Scratch space is redirected here rather than mounted over /tmp: the
-    # image keeps its Python interpreter under /tmp, so a tmpfs there hides the
-    # interpreter and the container never starts.
-    tmpfs:
-      - /profiles:size=256m,mode=1777
-    environment:
-      TZ: America/Sao_Paulo
-      LOG_LEVEL: INFO
-      BLOCK_MEDIA: "true"
-      TMPDIR: /profiles
-    expose:
-      - "8191"
-    # The image ships a 15m healthcheck pointed at /health, which drives a real
-    # browser through a full solve. Docker never restarts an unhealthy container
-    # outside Swarm, so that spent ~96 browser boots a day on a status label;
-    # the docs route answers the same question for free.
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/docs"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    # ~400MB per concurrent solve plus the uvicorn base.
-    mem_limit: ${SOLVER_MEM:-1500m}
-    networks:
-      - manga
-
-  # ---- Third solver, tried last: not GET-only like Byparr, and still clears
-  #      sites Byparr reports as solved but is not. ----
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
-    container_name: flaresolverr
-    restart: unless-stopped
-    init: true
-    environment:
-      TZ: America/Sao_Paulo
-      LOG_LEVEL: info
-    expose:
-      - "8191"
+    mem_limit: ${TRAWL_MEM:-2048m}
     networks:
       - manga
 

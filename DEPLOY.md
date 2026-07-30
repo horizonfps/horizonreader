@@ -1,7 +1,7 @@
 # Deploy — reader.horizonfps.space
 
 App no PC de casa via Docker, publicado por uma Cloudflare Tunnel. Só o app web
-fica exposto; Suwayomi e FlareSolverr ficam internos.
+fica exposto; Suwayomi e o motor de desafio (trawl) ficam internos.
 
 ## Pré-requisitos
 
@@ -22,7 +22,7 @@ AUTH_SECRET=<string longa aleatória>
 WEB_PORT=41573
 ```
 
-Suba só o app (reaproveita Suwayomi/FlareSolverr se já estiverem de pé):
+Suba só o app (reaproveita Suwayomi/trawl se já estiverem de pé):
 
 ```
 docker compose up -d --build web
@@ -30,16 +30,13 @@ docker compose up -d --build web
 
 - Teste local: http://localhost:41573
 - Admin do Suwayomi (extensões / fontes): http://localhost:4567 (só localhost).
-- Os três motores de desafio (trawl, Byparr e FlareSolverr) sobem junto com o
-  resto, nessa ordem. Nenhum vence sozinho: o trawl escalona
-  HTTP puro → sessão em cache no Redis → navegador Camoufox → proxy
-  residencial, e é o primeiro a ser tentado por ser o mais barato; o Byparr
-  limpa os *managed challenges* em que o FlareSolverr é detectado, mas só faz
-  GET; o FlareSolverr é o último recurso. O app tenta os três, na ordem, e
-  lembra qual funcionou por host. `SOLVER_PROXY_TOKEN` no `.env` é
-  obrigatório: é o segredo no caminho de `/api/solver/<token>/v1`, a fachada
-  que o Suwayomi usa para também ganhar o fallback (ele só aceita um
-  `FLARESOLVERR_URL`).
+- O motor de desafio é só o trawl (mais Redis para a sessão em cache) — medição
+  feita neste repositório a partir de um IP brasileiro: o trawl acertou 20 de
+  20 alvos contra 0 de 9 do Byparr, então manter três motores deixou de fazer
+  sentido. O trawl escalona HTTP puro → sessão em cache no Redis → navegador
+  Camoufox → proxy residencial. `SOLVER_PROXY_TOKEN` no `.env` é obrigatório: é
+  o segredo no caminho de `/api/solver/<token>/v1`, a fachada que o Suwayomi
+  usa (ele só aceita um `FLARESOLVERR_URL`).
 
 ## 1.1 Instalar as fontes do Suwayomi
 
@@ -118,6 +115,9 @@ Quando o `docker-compose.yml` ganha serviço novo (caso do trawl e do Redis
 dele), esse `web` no fim não basta — sobe só o app e o serviço novo nunca
 nasce. Rode `docker compose up -d --build` sem nomear serviço.
 
-**Atenção:** se o `.env` da VPS já define `SOLVERS`, ele vence o default do
-compose e precisa ganhar o `trawl` na frente, senão o motor novo sobe e nunca
-é chamado.
+**Atenção:** se o `.env` já define `SOLVERS`, ele vence o default do compose e
+precisa valer `trawl@http://trawl:8191`, senão o app nunca chama o motor.
+
+Ao atualizar para a versão que tirou `byparr` e `flaresolverr` do compose, rode
+`docker compose up -d --build --remove-orphans`: sem o `--remove-orphans` os
+dois containers removidos continuam de pé na máquina.
