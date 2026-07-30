@@ -10,6 +10,13 @@
 // and a reply that is still a challenge page counts as a failure.
 
 import { isMuted, recordFail, recordOk } from "@/lib/backbone/sourceStats";
+import {
+  isBenched,
+  lastFailAt,
+  lastWinner,
+  recordSolverFail,
+  recordSolverOk,
+} from "@/lib/scrapers/solverMemory";
 
 type SolverKind = "flaresolverr" | "byparr";
 type Solver = { kind: SolverKind; url: string };
@@ -57,8 +64,6 @@ export type Clearance = { cookie: string; userAgent: string; at: number };
 
 const clearances = new Map<string, Clearance>();
 const inflight = new Map<string, Promise<string>>();
-// Which solver last cleared a host; tried first next time.
-const preferred = new Map<string, SolverKind>();
 
 type Waiter = { grant: () => void; settled: boolean };
 
@@ -86,12 +91,6 @@ function hostOf(url: string): string {
 // piles browser contexts up.
 function breakerKey(host: string): string {
   return `flare:${host}`;
-}
-
-// The engine an IP is fingerprinted on for one host still clears every other
-// host, so the penalty is remembered per solver and host, never globally.
-function solverKey(kind: SolverKind, host: string): string {
-  return `flare:${kind}:${host}`;
 }
 
 export function getClearance(url: string): Clearance | null {
@@ -237,12 +236,17 @@ async function callSolver(
 
 function solverOrder(host: string, cmd: "request.get" | "request.post"): Solver[] {
   const usable = cmd === "request.post" ? SOLVERS.filter((s) => s.kind === "flaresolverr") : SOLVERS;
-  const win = preferred.get(host);
-  // A solver the host keeps rejecting goes last instead of burning the budget
-  // ahead of the one that still works there.
-  const rank = (s: Solver) =>
-    (isMuted(solverKey(s.kind, host)) ? 2 : 0) + (s.kind === win ? -1 : 0);
-  return [...usable].sort((a, b) => rank(a) - rank(b));
+  const free = usable.filter((s) => !isBenched(s.kind, host));
+  if (free.length) {
+    // A benched solver is dropped outright rather than merely deprioritized:
+    // that is the whole point, no browser context spent on one that only
+    // fails here while another still works.
+    const win = lastWinner(host);
+    return win ? [...free].sort((a, b) => Number(b.kind === win) - Number(a.kind === win)) : free;
+  }
+  // Every solver is benched for this host; keep them all so it is never left
+  // with zero attempts, oldest failure (most likely to have recovered) first.
+  return [...usable].sort((a, b) => lastFailAt(a.kind, host) - lastFailAt(b.kind, host));
 }
 
 // Win clearance for a host by solving its landing page, so the caller can
@@ -300,14 +304,13 @@ export async function flareSolve(
           attempts += 1;
           const budget = Math.min(FLARE_TIMEOUT, remaining - SOLVE_GRACE_MS);
           const html = await callSolver(solver, cmd, url, postData, budget, opts.signal);
-          preferred.set(host, solver.kind);
-          recordOk(solverKey(solver.kind, host), Date.now() - started);
+          recordSolverOk(solver.kind, host, Date.now() - started);
           recordOk(breakerKey(host), Date.now() - started);
           return html;
         } catch (e) {
           // A caller that hung up says nothing about the solver or the host.
           if (opts.signal?.aborted) throw e;
-          recordFail(solverKey(solver.kind, host));
+          recordSolverFail(solver.kind, host);
           lastError = e;
         }
       }
