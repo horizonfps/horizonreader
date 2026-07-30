@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 import { getSession } from "@/lib/session";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
+import { getDiskImage, setDiskImage } from "@/lib/diskCache";
 
 export const runtime = "nodejs";
 
@@ -20,6 +22,22 @@ const UA = "horizonreader/1.0";
 
 function isAllowedHost(host: string): boolean {
   return ALLOWED_HOSTS.has(host) || host.endsWith(".comick.pictures");
+}
+
+// Re-encodes a cover to WebP before it hits any cache tier, so the disk tier
+// stores one small, uniform format regardless of what the source served.
+async function toWebp(
+  body: Uint8Array,
+  fallbackContentType: string,
+): Promise<{ body: Uint8Array; contentType: string }> {
+  try {
+    const out = await sharp(body).webp({ quality: 80 }).toBuffer();
+    return { body: new Uint8Array(out), contentType: "image/webp" };
+  } catch {
+    // Not a raster image sharp understands (or a decode failure): keep the
+    // original bytes rather than fail the request.
+    return { body, contentType: fallbackContentType };
+  }
 }
 
 // Host-whitelisted image proxy: the browser never hits MangaDex/Comick directly.
@@ -51,6 +69,15 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const cold = await getDiskImage(cacheKey);
+  if (cold) {
+    setCachedImage(cacheKey, cold.body, cold.contentType);
+    return new NextResponse(new Uint8Array(cold.body), {
+      status: 200,
+      headers: { "Content-Type": cold.contentType, "Cache-Control": CACHE_CONTROL },
+    });
+  }
+
   try {
     const headers: Record<string, string> = { "User-Agent": UA };
 
@@ -66,11 +93,14 @@ export async function GET(req: NextRequest) {
       return new NextResponse(null, { status: 404 });
     }
 
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const body = new Uint8Array(await upstream.arrayBuffer());
-    setCachedImage(cacheKey, body, contentType);
+    const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const rawBody = new Uint8Array(await upstream.arrayBuffer());
+    const { body, contentType } = await toWebp(rawBody, upstreamContentType);
 
-    return new NextResponse(body, {
+    setCachedImage(cacheKey, body, contentType);
+    void setDiskImage(cacheKey, body, contentType);
+
+    return new NextResponse(new Uint8Array(body), {
       status: 200,
       headers: { "Content-Type": contentType, "Cache-Control": CACHE_CONTROL },
     });
