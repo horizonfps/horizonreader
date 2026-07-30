@@ -57,9 +57,10 @@ export async function getCachedChapters<T>(
     const row = await prisma.chapterListCache.findUnique({ where: { sourceLinkId: link.id } });
     if (!row) return null;
     const at = row.fetchedAt.getTime();
-    if (Date.now() - at > DB_TTL) return null;
     const data = JSON.parse(row.payload) as T;
-    setMem(key, data, at);
+    // Past DB_TTL the row is served anyway, just always stale: a saved list
+    // beats the empty page a dead source would otherwise render.
+    if (Date.now() - at <= DB_TTL) setMem(key, data, at);
     return { data, stale: Date.now() - at > MEM_TTL };
   } catch {
     return null;
