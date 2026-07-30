@@ -147,7 +147,13 @@ async function worker() {
   for (;;) {
     const item = queue.shift();
     if (!item) return;
-    const r = await probe(item[0], item[1]);
+    // A saturated pool answers 500 to a target that solves fine on the next
+    // try, so one attempt alone reports a block that isn't there.
+    let r = await probe(item[0], item[1]);
+    if (!r.verdict.startsWith("PASSOU")) {
+      const retry = await probe(item[0], item[1]);
+      if (retry.verdict.startsWith("PASSOU")) r = { ...retry, why: `${retry.why} (2a tentativa)` };
+    }
     results.push(r);
     const tag = `${r.verdict}`.padEnd(9);
     console.log(`${tag} ${r.name.padEnd(18)} ${String(r.ms).padStart(6)}ms  ${r.kb ?? "-"}kb  ${r.why}`);
