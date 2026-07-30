@@ -25,12 +25,15 @@ const TARGETS = [
   ["boratscans", "https://boratscans.com/?s=solo"],
   ["dragontea", "https://dragontea.ink/?s=solo&post_type=wp-manga"],
   ["luratoons", "https://luratoons.net/?s=solo"],
-  ["manhuafast", "https://manhuafast.com/?s=solo&post_type=wp-manga"],
   ["batcave", "https://batcave.biz/search/batman/"],
-  ["luacomic", "https://api.luacomic.org/api/series"],
+  // The api.* subdomains of these two sit behind a stricter WAF than the site
+  // itself and answer 403 to everything, which reads as a block that isn't one.
+  ["luacomic", "https://luacomic.org/?s=solo"],
   ["frieren", "https://www.frieren.online/?s=solo"],
-  ["housesaikai", "https://api.housesaikai.net/api/series"],
-  ["toonlivre", "https://toonlivre.net/?s=solo"],
+  ["housesaikai", "https://housesaikai.net/?s=solo"],
+  // toonlivre.net redirects to www.mangalivre.net, which is NXDOMAIN; the live
+  // destination is the same host without the www.
+  ["toonlivre", "https://mangalivre.net/"],
   ["risentoons", "https://risentoons.xyz/?s=solo"],
   ["mangastop", "https://mangastop.net/?s=solo"],
 ];
