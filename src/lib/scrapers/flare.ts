@@ -303,15 +303,21 @@ export async function flareSolve(
     try {
       let lastError: unknown = new Error("solver_failed");
       let attempts = 0;
-      for (const solver of order) {
-        const remaining = deadline - Date.now();
-        if (remaining < MIN_ATTEMPT_MS) {
+      const why: string[] = [];
+      for (const [i, solver] of order.entries()) {
+        const usable = deadline - Date.now() - SOLVE_GRACE_MS;
+        if (usable < MIN_ATTEMPT_MS) {
           lastError = new Error("solver_budget_exhausted");
           break;
         }
+        // A timeout on the first engine used to eat the whole budget, so the
+        // one that actually clears the host was never asked. Each engine still
+        // waiting keeps a minimum attempt reserved for it.
+        const reserve = (order.length - 1 - i) * MIN_ATTEMPT_MS;
+        const share = usable - reserve;
+        const budget = Math.min(FLARE_TIMEOUT, share < MIN_ATTEMPT_MS ? usable : share);
         try {
           attempts += 1;
-          const budget = Math.min(FLARE_TIMEOUT, remaining - SOLVE_GRACE_MS);
           const html = await callSolver(solver, cmd, url, postData, budget, opts.signal);
           recordSolverOk(solver.kind, host, Date.now() - started);
           recordOk(breakerKey(host), Date.now() - started);
@@ -321,9 +327,17 @@ export async function flareSolve(
           if (opts.signal?.aborted) throw e;
           recordSolverFail(solver.kind, host);
           lastError = e;
+          why.push(`${solver.kind}=${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      if (attempts) recordFail(breakerKey(host));
+      if (attempts) {
+        recordFail(breakerKey(host));
+        // One line, because the log panel folds a broken one into the previous
+        // stack trace.
+        console.warn(
+          `[solver] all engines failed host=${host} ms=${Date.now() - started} ${why.join(" ")}`,
+        );
+      }
       throw lastError;
     } finally {
       release();
