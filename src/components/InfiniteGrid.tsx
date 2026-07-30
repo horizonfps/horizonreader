@@ -12,9 +12,9 @@ const fetcher = (url: string): Promise<Page> => fetch(url).then((r) => r.json())
 
 function MangaCard({ item, index }: { item: Card; index: number }) {
   const src = coverProxy(item.coverUrl);
-  const priority = index < 6;
+  const priority = index < 4;
   return (
-    <PrefetchLink href={workHref(item)} className="card-lazy block">
+    <PrefetchLink href={workHref(item)} className="block">
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -22,7 +22,7 @@ function MangaCard({ item, index }: { item: Card; index: number }) {
             src={src}
             alt=""
             loading={priority ? "eager" : "lazy"}
-            fetchPriority={priority ? "high" : "low"}
+            fetchPriority={priority ? "high" : undefined}
             draggable={false}
             className="cover-img h-full w-full object-cover"
           />

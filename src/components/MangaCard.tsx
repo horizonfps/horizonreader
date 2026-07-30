@@ -16,7 +16,7 @@ export default function MangaCard({
 }) {
   const src = coverProxy(item.coverUrl);
   return (
-    <PrefetchLink href={workHref(item)} className="card-lazy block">
+    <PrefetchLink href={workHref(item)} className="block">
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
