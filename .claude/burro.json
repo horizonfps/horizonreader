@@ -1,0 +1,9 @@
+{
+  "verify": "npm run build",
+  "test": null,
+  "start": "npm run dev -- -p 3100",
+  "url": "http://localhost:3100",
+  "branchPrincipal": "main",
+  "ticketsDir": "docs/tickets",
+  "maxTickets": 6
+}
