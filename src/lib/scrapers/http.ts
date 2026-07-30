@@ -16,6 +16,24 @@ const UA =
 
 const TIMEOUT = 20_000;
 
+// Status codes a WAF/CDN answers a block with. A 404 or 500 means the origin
+// itself failed, which a solve cannot fix, so only these justify the cost.
+const BLOCK_STATUSES = new Set([403, 429, 503]);
+
+class HttpStatusError extends Error {
+  constructor(readonly status: number, method: string, url: string) {
+    super(`${method} ${url} -> ${status}`);
+  }
+}
+
+// A response we actually got but that isn't a block indicator is never worth
+// escalating; anything else (timeout, connection refused) has no status to
+// check and is treated as the datacenter-IP block case flare exists for.
+function isBlockingFailure(e: unknown): boolean {
+  if (e instanceof HttpStatusError) return BLOCK_STATUSES.has(e.status);
+  return true;
+}
+
 function baseHeaders(url: string, referer?: string): Record<string, string> {
   const h: Record<string, string> = {
     "User-Agent": UA,
@@ -42,9 +60,10 @@ export async function getText(url: string, referer?: string): Promise<string> {
       cache: "no-store",
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error(`GET ${url} -> ${res.status}`);
+    if (!res.ok) throw new HttpStatusError(res.status, "GET", url);
     return await res.text();
   } catch (e) {
+    if (!isBlockingFailure(e)) throw e;
     // Stale clearance is worse than none: drop it so the solve starts clean.
     if (hadClearance) dropClearance(url);
     if (flareEnabled()) return flareSolve("request.get", url);
@@ -69,7 +88,7 @@ async function rawPost(url: string, encoded: string, referer?: string): Promise<
       cache: "no-store",
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error(`POST ${url} -> ${res.status}`);
+    if (!res.ok) throw new HttpStatusError(res.status, "POST", url);
     return await res.text();
   } finally {
     clearTimeout(t);
@@ -86,6 +105,7 @@ export async function postForm(
   try {
     return await rawPost(url, encoded, referer);
   } catch (e) {
+    if (!isBlockingFailure(e)) throw e;
     // Stale clearance is worse than none: drop it so the solve starts clean.
     if (hadClearance) dropClearance(url);
     if (!flareEnabled()) throw e;
