@@ -10,17 +10,19 @@ type Page = { items: Card[]; nextCursor: number | null };
 
 const fetcher = (url: string): Promise<Page> => fetch(url).then((r) => r.json());
 
-function MangaCard({ item }: { item: Card }) {
+function MangaCard({ item, index }: { item: Card; index: number }) {
   const src = coverProxy(item.coverUrl);
+  const priority = index < 6;
   return (
-    <PrefetchLink href={workHref(item)} className="block">
+    <PrefetchLink href={workHref(item)} className="card-lazy block">
       <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={src}
             alt=""
-            loading="lazy"
+            loading={priority ? "eager" : "lazy"}
+            fetchPriority={priority ? "high" : "low"}
             draggable={false}
             className="cover-img h-full w-full object-cover"
           />
@@ -91,11 +93,11 @@ export default function InfiniteGrid({
   return (
     <div>
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
-        {items.map((item) => {
+        {items.map((item, i) => {
           const key = `${item.origin}:${item.externalId}`;
           if (seen.has(key)) return null;
           seen.add(key);
-          return <MangaCard key={key} item={item} />;
+          return <MangaCard key={key} item={item} index={i} />;
         })}
       </div>
 
