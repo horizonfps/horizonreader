@@ -49,9 +49,12 @@ envelhece (a produção ficou sem nenhuma fonte pt-BR). Depois de subir:
 ```
 docker compose exec web npm run sync-extensions
 docker compose exec web npm run sync-extensions -- --dry-run   # só listar
+docker compose exec web npm run sync-extensions -- --no-nsfw   # pular as adultas
 ```
 
-Instala todas as extensões en / pt-BR / all não adultas do repo Keiyoushi.
+Instala todas as extensões en / pt-BR / all do repo Keiyoushi, incluindo as
+marcadas como adultas. Uma obra +18 marca a extensão inteira, e pular essas
+custava 77 das 113 fontes pt-BR.
 
 ## 2. Cloudflare Tunnel → app
 
