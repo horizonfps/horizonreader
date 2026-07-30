@@ -12,14 +12,17 @@ const MODE = process.argv[4] ?? "v1";
 const BUDGET_MS = 60_000;
 
 const TARGETS = [
-  ["comick", "https://comick.io/search?q=solo+leveling"],
+  // comick.io -> comick.dev and valirscans.com -> valirscans.org are permanent
+  // moves. Pointed at the old host, trawl intermittently hands back the 301
+  // stub instead of following it, which reads as a block.
+  ["comick", "https://comick.dev/search?q=solo+leveling"],
   ["mangalivre", "https://mangalivre.to/?s=solo&post_type=wp-manga"],
   ["toonily", "https://toonily.com/search/solo/"],
   ["manhuaus", "https://manhuaus.com/?s=solo&post_type=wp-manga"],
   ["natomanga", "https://www.natomanga.com/search/story/solo_leveling"],
   ["mangakakalot", "https://www.mangakakalot.gg/search/story/solo_leveling"],
   ["setsuscans", "https://setsuscans.com/?s=solo"],
-  ["valirscans", "https://valirscans.com/?s=solo"],
+  ["valirscans", "https://valirscans.org/?s=solo"],
   ["readcomicsonline", "https://readcomicsonline.ru/search?query=batman"],
   ["brainrotcomics", "https://brainrotcomics.com/?s=solo"],
   ["boratscans", "https://boratscans.com/?s=solo"],
