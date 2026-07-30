@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
+import { getDiskImage, setDiskImage } from "@/lib/diskCache";
+import { shrinkCover } from "@/lib/coverImage";
 
 export const runtime = "nodejs";
 
@@ -42,12 +44,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "forbidden_host" }, { status: 400 });
   }
 
-  const cacheKey = target.toString();
+  // Versioned so a format change here never serves stale bytes from before it.
+  const cacheKey = `cover:v1:${target.toString()}`;
   const hit = getCachedImage(cacheKey);
   if (hit) {
     return new NextResponse(new Uint8Array(hit.body), {
       status: 200,
       headers: { "Content-Type": hit.contentType, "Cache-Control": CACHE_CONTROL },
+    });
+  }
+
+  const cold = await getDiskImage(cacheKey, "cover");
+  if (cold) {
+    setCachedImage(cacheKey, cold.body, cold.contentType);
+    return new NextResponse(new Uint8Array(cold.body), {
+      status: 200,
+      headers: { "Content-Type": cold.contentType, "Cache-Control": CACHE_CONTROL },
     });
   }
 
@@ -66,11 +78,14 @@ export async function GET(req: NextRequest) {
       return new NextResponse(null, { status: 404 });
     }
 
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    const body = new Uint8Array(await upstream.arrayBuffer());
-    setCachedImage(cacheKey, body, contentType);
+    const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
+    const rawBody = new Uint8Array(await upstream.arrayBuffer());
+    const { body, contentType } = await shrinkCover(rawBody, upstreamContentType);
 
-    return new NextResponse(body, {
+    setCachedImage(cacheKey, body, contentType);
+    void setDiskImage(cacheKey, body, contentType, "cover");
+
+    return new NextResponse(new Uint8Array(body), {
       status: 200,
       headers: { "Content-Type": contentType, "Cache-Control": CACHE_CONTROL },
     });

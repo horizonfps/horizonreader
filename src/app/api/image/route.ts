@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { isAllowedImageHost } from "@/lib/scrapers";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
-import { getDiskImage, setDiskImage } from "@/lib/diskCache";
+import { getDiskImage, setDiskImage, type Tier } from "@/lib/diskCache";
+import { shrinkCover } from "@/lib/coverImage";
 
 export const runtime = "nodejs";
 
@@ -78,12 +79,15 @@ export async function GET(req: NextRequest) {
     target = BASE + path;
   }
 
-  // Chapter pages never change, so they get the disk tier and an immutable
-  // header. Thumbnails stay memory-only, since a source may swap a cover.
+  // Chapter pages never change, so they get the page disk tier and an
+  // immutable header. Thumbnails get the cover tier (shrunk to WebP) and a
+  // revalidate header, since a source may swap a cover.
   const isPage = !!ext || path.includes("/chapter/");
   const cacheControl = isPage ? IMMUTABLE : REVALIDATE;
+  const tier: Tier = isPage ? "page" : "cover";
+  const cacheKey = isPage ? target : `cover:v1:${target}`;
 
-  const hot = getCachedImage(target);
+  const hot = getCachedImage(cacheKey);
   if (hot) {
     return new NextResponse(new Uint8Array(hot.body), {
       status: 200,
@@ -91,15 +95,13 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  if (isPage) {
-    const cold = await getDiskImage(target);
-    if (cold) {
-      setCachedImage(target, cold.body, cold.contentType);
-      return new NextResponse(new Uint8Array(cold.body), {
-        status: 200,
-        headers: { "content-type": cold.contentType, "cache-control": cacheControl },
-      });
-    }
+  const cold = await getDiskImage(cacheKey, tier);
+  if (cold) {
+    setCachedImage(cacheKey, cold.body, cold.contentType);
+    return new NextResponse(new Uint8Array(cold.body), {
+      status: 200,
+      headers: { "content-type": cold.contentType, "cache-control": cacheControl },
+    });
   }
 
   const upstream = await fetchUpstream(
@@ -110,13 +112,17 @@ export async function GET(req: NextRequest) {
     return new NextResponse(null, { status: upstream?.status || 502 });
   }
 
-  const ct = upstream.headers.get("content-type") || "application/octet-stream";
-  const body = new Uint8Array(await upstream.arrayBuffer());
-  setCachedImage(target, body, ct);
-  if (isPage) void setDiskImage(target, body, ct);
+  const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
+  const rawBody = new Uint8Array(await upstream.arrayBuffer());
+  const { body, contentType } = isPage
+    ? { body: rawBody, contentType: upstreamContentType }
+    : await shrinkCover(rawBody, upstreamContentType);
 
-  return new NextResponse(body, {
+  setCachedImage(cacheKey, body, contentType);
+  void setDiskImage(cacheKey, body, contentType, tier);
+
+  return new NextResponse(new Uint8Array(body), {
     status: 200,
-    headers: { "content-type": ct, "cache-control": cacheControl },
+    headers: { "content-type": contentType, "cache-control": cacheControl },
   });
 }

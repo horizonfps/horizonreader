@@ -5,13 +5,12 @@ import { BookOpen, Check } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { getWorkWithLinks, resolveSourcesForWork, waitForLinks } from "@/lib/backbone/resolve";
-import { getMangaEnsured, getChapters } from "@/lib/suwayomi";
-import { getNativeChapters } from "@/lib/scrapers/native";
 import {
-  chapterCacheKey,
   getCachedChapters,
   setCachedChapters,
   bustChapters,
+  loadChaptersForLink,
+  revalidateChapters,
 } from "@/lib/chapterCache";
 import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
 import { coverProxy } from "@/lib/cards";
@@ -194,7 +193,7 @@ async function SourcesAndChapters({
     const freshLinks = await prisma.sourceLink
       .findMany({ where: { workId }, select: { id: true, kind: true, sourceMangaId: true } })
       .catch(() => []);
-    bustChapters(freshLinks.map(chapterCacheKey));
+    await bustChapters(freshLinks);
     redirect(`/work/${slug}${src ? `?src=${src}` : ""}`);
   }
 
@@ -238,17 +237,13 @@ async function SourcesAndChapters({
   };
   let chapters: ChapterView[] = [];
   if (selected) {
-    const key = chapterCacheKey(selected);
-    chapters = getCachedChapters<ChapterView[]>(key) ?? [];
-    if (!chapters.length) {
-      if (selected.kind === "scraper") {
-        chapters = await getNativeChapters(selected.id).catch(() => []);
-      } else {
-        // A link that already carries chapters was initialized by the sync.
-        if (!selected.chapterCount) await getMangaEnsured(selected.sourceMangaId).catch(() => null);
-        chapters = await getChapters(selected.sourceMangaId).catch(() => []);
-      }
-      if (chapters.length) setCachedChapters(key, chapters);
+    const hit = await getCachedChapters<ChapterView[]>(selected);
+    if (hit) {
+      chapters = hit.data;
+      if (hit.stale) revalidateChapters(selected);
+    } else {
+      chapters = (await loadChaptersForLink(selected)) as ChapterView[];
+      if (chapters.length) await setCachedChapters(selected, chapters);
     }
   }
 

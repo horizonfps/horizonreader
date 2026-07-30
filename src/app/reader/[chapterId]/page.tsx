@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { fetchChapterPages, getChapters, proxied, pageUrl } from "@/lib/suwayomi";
+import { fetchChapterPages, getChapters } from "@/lib/suwayomi";
 import { getScraper } from "@/lib/scrapers";
 import { NATIVE_OFFSET, isNativeChapterId, proxyScraperImage } from "@/lib/scrapers/native";
+import { suwayomiPageUrls } from "@/lib/readerPages";
 import { dedupeByNumber, scanlatorKey } from "@/lib/chapters";
 import Reader from "@/components/Reader";
 
@@ -74,11 +75,8 @@ async function loadSuwayomi(chapterId: number): Promise<ReaderData | null> {
   const data = await fetchChapterPages(chapterId).catch(() => null);
   if (!data) return null;
 
-  const { pages, mangaId, sourceOrder, pageCount } = data;
-  const urls =
-    pages && pages.length > 0
-      ? pages.map((p) => proxied(p))
-      : Array.from({ length: pageCount }, (_, i) => pageUrl(mangaId, sourceOrder, i));
+  const { mangaId } = data;
+  const urls = suwayomiPageUrls(data);
 
   // Navigate within the current chapter's scanlator only, so next/prev advances
   // by number instead of jumping to another scan's upload of the same chapter.

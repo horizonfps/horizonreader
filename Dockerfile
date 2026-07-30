@@ -10,6 +10,8 @@ COPY package.json package-lock.json* ./
 # Schema must exist before install: postinstall runs `prisma generate`.
 COPY prisma ./prisma
 RUN npm install --include=dev --no-audit --no-fund
+# Windows lockfile carries only the win32 sharp binary; force the linux one.
+RUN npm install --no-audit --no-fund --os=linux --libc=glibc --cpu=x64 sharp
 
 COPY . .
 RUN npm run build

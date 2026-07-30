@@ -23,6 +23,7 @@ export default function CardRow({
     <div className="no-scrollbar -mx-4 flex gap-3 overflow-x-auto px-4">
       {items.map((it, i) => {
         const src = coverProxy(it.coverUrl);
+        const priority = i < 2;
         return (
           <PrefetchLink
             key={`${it.href}:${i}`}
@@ -35,7 +36,8 @@ export default function CardRow({
                 <img
                   src={src}
                   alt=""
-                  loading="lazy"
+                  loading={priority ? "eager" : "lazy"}
+                  fetchPriority={priority ? "high" : undefined}
                   draggable={false}
                   className="cover-img h-full w-full object-cover"
                 />

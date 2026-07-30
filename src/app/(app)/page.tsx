@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getHomeSections } from "@/lib/backbone/sections";
 import { getHorizonPicks } from "@/lib/backbone/recommend";
 import { attachLocalSlugs } from "@/lib/backbone/localslugs";
+import { indexComickItems } from "@/lib/backbone/prewarm";
 import WindowTabs from "@/components/WindowTabs";
 import SectionRow from "@/components/SectionRow";
 import CardRow from "@/components/CardRow";
@@ -80,6 +81,15 @@ export default async function HomePage() {
     ...(popular ? [popular["30d"], popular["6m"], popular["12m"], popular.all] : []),
     ...(completed ? [completed["7d"], completed["30d"], completed["12m"]] : []),
     bestNew,
+  ]);
+
+  // Order matters: attachLocalSlugs first, since a known localSlug is exactly
+  // what does not need indexing.
+  indexComickItems([
+    ...horizonPicks,
+    ...(popular ? [...popular["30d"], ...popular["6m"], ...popular["12m"], ...popular.all] : []),
+    ...(completed ? [...completed["7d"], ...completed["30d"], ...completed["12m"]] : []),
+    ...bestNew,
   ]);
 
   return (

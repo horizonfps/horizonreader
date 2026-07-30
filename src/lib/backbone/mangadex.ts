@@ -3,6 +3,7 @@
 import type { BackboneWork, WorkStatus } from "./types";
 import { originLangToType } from "./types";
 import { BLOCKED_MDX_TAGS } from "./filter";
+import { cachedJson } from "./httpCache";
 
 const BASE = "https://api.mangadex.org";
 const COVERS = "https://uploads.mangadex.org/covers";
@@ -43,19 +44,32 @@ function schedule(): Promise<void> {
 // Hard ceiling per call: a hung MangaDex must not hang search or resolve.
 const FETCH_TIMEOUT_MS = 8_000;
 
+// Cache lifetime by route family: a tag list barely changes, a listing/search
+// result goes stale fast.
+function ttlFor(path: string): number {
+  if (path.startsWith("/manga/tag")) return 7 * 86_400_000;
+  if (path.startsWith("/statistics/manga")) return 60 * 60_000;
+  if (path.includes("/aggregate")) return 6 * 3_600_000;
+  if (path.startsWith("/manga/")) return 12 * 3_600_000;
+  return 30 * 60_000;
+}
+
 async function getJson<T = unknown>(path: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<T | null> {
-  try {
-    await schedule();
-    const res = await fetch(`${BASE}${path}`, {
-      headers: HEADERS,
-      cache: "no-store",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
+  return cachedJson<T>(`mdx:${path}`, ttlFor(path), async () => {
+    try {
+      // Gate lives inside the load: a cache hit must never pay the 220ms wait.
+      await schedule();
+      const res = await fetch(`${BASE}${path}`, {
+        headers: HEADERS,
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  });
 }
 
 // Shared entry point so every MangaDex call in the app rides the same throttle.
