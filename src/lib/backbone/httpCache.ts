@@ -10,14 +10,18 @@ import { join } from "node:path";
 const DIR =
   process.env.BACKBONE_CACHE_DIR || (existsSync("/data") ? "/data/jsoncache" : ".cache/json");
 const MAX_MEM_ENTRIES = 500;
+// A single MangaDex listing runs to hundreds of KB, so entry count alone lets
+// the map grow past the whole process budget. Bytes are the real ceiling.
+const MAX_MEM_BYTES = Number(process.env.BACKBONE_CACHE_MEM_MB || 96) * 1024 * 1024;
 const MAX_AGE_MS = 30 * 86_400_000;
 const MAX_FILES = 20_000;
 const SWEEP_EVERY_MS = 10 * 60_000;
 
-type Entry = { data: unknown; at: number };
+type Entry = { data: unknown; at: number; bytes: number };
 type DiskShape = { v: 1; at: number; data: unknown };
 
 const mem = new Map<string, Entry>();
+let memBytes = 0;
 // Dedupes concurrent loads (first fetch or background revalidation) per key.
 const inFlight = new Map<string, Promise<unknown>>();
 
@@ -32,11 +36,27 @@ function pathFor(key: string): string {
   return join(DIR, `${h}.json`);
 }
 
+// Rough payload weight, charged as UTF-16 so the estimate never undershoots.
+function weigh(data: unknown): number {
+  try {
+    return JSON.stringify(data).length * 2;
+  } catch {
+    return 0;
+  }
+}
+
 function rememberMem(key: string, data: unknown, at: number): void {
-  mem.delete(key);
-  mem.set(key, { data, at });
-  while (mem.size > MAX_MEM_ENTRIES) {
+  const prev = mem.get(key);
+  if (prev) {
+    mem.delete(key);
+    memBytes -= prev.bytes;
+  }
+  const bytes = weigh(data);
+  mem.set(key, { data, at, bytes });
+  memBytes += bytes;
+  while (mem.size > MAX_MEM_ENTRIES || (memBytes > MAX_MEM_BYTES && mem.size > 1)) {
     const oldest = mem.keys().next().value!;
+    memBytes -= mem.get(oldest)!.bytes;
     mem.delete(oldest);
   }
 }
@@ -47,7 +67,7 @@ async function readDisk(key: string): Promise<Entry | null> {
     const raw = JSON.parse(await readFile(pathFor(key), "utf8")) as Partial<DiskShape>;
     if (raw.v !== 1 || typeof raw.at !== "number") return null;
     if (Date.now() - raw.at > MAX_AGE_MS) return null;
-    return { data: raw.data, at: raw.at };
+    return { data: raw.data, at: raw.at, bytes: weigh(raw.data) };
   } catch {
     return null;
   }
