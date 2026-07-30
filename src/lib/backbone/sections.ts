@@ -3,6 +3,7 @@
 import { comickSections, getComickGenres, getComickTrending } from "@/lib/backbone/comick";
 import { listMangaDex } from "@/lib/backbone/mangadex";
 import { isBlocked } from "@/lib/backbone/filter";
+import { indexBackboneWorks } from "@/lib/backbone/prewarm";
 import type { BackboneWork, SectionItem } from "@/lib/backbone/types";
 
 const CAP = 30;
@@ -136,6 +137,7 @@ export async function getHomeSections(): Promise<HomeSections> {
       }),
       [] as BackboneWork[],
     );
+    indexBackboneWorks(mdxCompleted);
     const mdxItems = mdxCompleted.map(workToItem);
 
     const completed = {
@@ -156,6 +158,7 @@ export async function getHomeSections(): Promise<HomeSections> {
         }),
         [] as BackboneWork[],
       );
+      indexBackboneWorks(mdxNew);
       bestNew = dedupCap(mdxNew.map(workToItem));
     }
 
