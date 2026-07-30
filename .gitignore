@@ -20,3 +20,5 @@ next-env.d.ts
 *.tsbuildinfo
 .DS_Store
 .playwright-mcp/
+
+.claude/worktrees/
