@@ -3,10 +3,10 @@
 
 import { prisma } from "@/lib/db";
 import { getPrimaryLink } from "@/lib/backbone/resolve";
-import { chapterCacheKey, getCachedChapters, setCachedChapters } from "@/lib/chapterCache";
+import { getCachedChapters, loadChaptersForLink, setCachedChapters } from "@/lib/chapterCache";
 import { dedupeByNumber, type RawChapter } from "@/lib/chapters";
-import { getNativeChapters, isNativeChapterId, NATIVE_OFFSET, proxyScraperImage } from "@/lib/scrapers/native";
-import { getMangaEnsured, getChapters, fetchChapterPages, proxied, pageUrl } from "@/lib/suwayomi";
+import { isNativeChapterId, NATIVE_OFFSET, proxyScraperImage } from "@/lib/scrapers/native";
+import { fetchChapterPages, proxied, pageUrl } from "@/lib/suwayomi";
 import { getScraper, isAllowedImageHost } from "@/lib/scrapers";
 import { getDiskImage, setDiskImage } from "@/lib/diskCache";
 
@@ -39,14 +39,6 @@ async function someoneIsReading(): Promise<boolean> {
     .findFirst({ where: { updatedAt: { gt: since } }, select: { id: true } })
     .catch(() => null);
   return !!row;
-}
-
-// Fetches a link's chapters straight from the source, same split as the work
-// page: native scrapers keep persisted rows, Suwayomi links hit the engine.
-async function loadChaptersForLink(link: ChapterLink): Promise<RawChapter[]> {
-  if (link.kind === "scraper") return getNativeChapters(link.id).catch(() => []);
-  if (!link.chapterCount) await getMangaEnsured(link.sourceMangaId).catch(() => null);
-  return getChapters(link.sourceMangaId).catch(() => []);
 }
 
 // First `limit` page URLs for a chapter, proxied the same way the reader gets
@@ -106,7 +98,7 @@ async function warmProxiedPage(proxiedUrl: string): Promise<boolean> {
     const isPage = !!urlParam || pathParam.includes("/chapter/");
     if (!isPage) return false;
 
-    if (await getDiskImage(target)) return false;
+    if (await getDiskImage(target, "page")) return false;
 
     const res = await fetch(target, {
       cache: "no-store",
@@ -117,7 +109,12 @@ async function warmProxiedPage(proxiedUrl: string): Promise<boolean> {
     if (!res || res.status !== 200) return false;
 
     const body = new Uint8Array(await res.arrayBuffer());
-    await setDiskImage(target, body, res.headers.get("content-type") || "application/octet-stream");
+    await setDiskImage(
+      target,
+      body,
+      res.headers.get("content-type") || "application/octet-stream",
+      "page",
+    );
     return true;
   } catch {
     return false;
@@ -152,11 +149,11 @@ async function cycle(): Promise<void> {
         const link = await getPrimaryLink(fav.workId);
         if (!link) continue;
 
-        const key = chapterCacheKey(link);
-        let chapters = getCachedChapters<RawChapter[]>(key) ?? [];
+        const hit = await getCachedChapters<RawChapter[]>(link);
+        let chapters = hit?.data ?? [];
         if (!chapters.length) {
           chapters = await loadChaptersForLink(link);
-          if (chapters.length) setCachedChapters(key, chapters);
+          if (chapters.length) await setCachedChapters(link, chapters);
         }
         if (!chapters.length) continue;
 
