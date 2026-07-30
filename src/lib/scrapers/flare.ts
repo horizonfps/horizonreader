@@ -3,15 +3,17 @@
 // reused: the clearance cookies ride on plain fetches until the site stops
 // accepting them.
 //
-// Two solver flavors are supported because neither wins alone: FlareSolverr
-// speaks the full API (POST, sessions) and clears some sites Byparr misses,
-// while Byparr drives a stealth Firefox that beats the managed challenges
-// FlareSolverr is fingerprinted on. Both are asked, best-known-first per host,
+// Three solver flavors are supported because none wins alone: trawl escalates
+// HTTP -> cached session -> Camoufox browser -> residential proxy, so it is
+// the cheapest first try and speaks POST too; FlareSolverr speaks the full
+// API (POST, sessions) and clears some sites Byparr misses; Byparr drives a
+// stealth Firefox that beats the managed challenges FlareSolverr is
+// fingerprinted on but is GET-only. All are asked, best-known-first per host,
 // and a reply that is still a challenge page counts as a failure.
 
 import { isMuted, recordFail, recordOk } from "@/lib/backbone/sourceStats";
 
-type SolverKind = "flaresolverr" | "byparr";
+type SolverKind = "flaresolverr" | "byparr" | "trawl";
 type Solver = { kind: SolverKind; url: string };
 
 const FLARE_TIMEOUT = Number(process.env.FLARE_TIMEOUT_MS || 60_000);
@@ -30,7 +32,13 @@ const SOLVE_GRACE_MS = 5_000;
 // attempt that cannot plausibly finish in what is left is never started.
 const MIN_ATTEMPT_MS = 15_000;
 
-// SOLVERS="flaresolverr@http://flaresolverr:8191,byparr@http://byparr:8191".
+function toKind(kind: string): SolverKind {
+  if (kind === "byparr") return "byparr";
+  if (kind === "trawl") return "trawl";
+  return "flaresolverr";
+}
+
+// SOLVERS="trawl@http://trawl:8191,byparr@http://byparr:8191,flaresolverr@http://flaresolverr:8191".
 // Falls back to the single-solver env pair kept for older deployments.
 function parseSolvers(): Solver[] {
   const raw = (process.env.SOLVERS || "").trim();
@@ -41,14 +49,14 @@ function parseSolvers(): Solver[] {
       const url = rest.join("@").trim().replace(/\/+$/, "");
       const kind = kindRaw.trim().toLowerCase();
       if (!url) continue;
-      out.push({ kind: kind === "byparr" ? "byparr" : "flaresolverr", url });
+      out.push({ kind: toKind(kind), url });
     }
     if (out.length) return out;
   }
   const single = (process.env.FLARESOLVERR_URL || "").trim().replace(/\/+$/, "");
   if (!single) return [];
   const kind = (process.env.SOLVER_KIND || "flaresolverr").toLowerCase();
-  return [{ kind: kind === "byparr" ? "byparr" : "flaresolverr", url: single }];
+  return [{ kind: toKind(kind), url: single }];
 }
 
 const SOLVERS = parseSolvers();
@@ -70,8 +78,9 @@ export function flareEnabled(): boolean {
 }
 
 // Whether any solver can replay a form POST through the challenge itself.
+// Byparr is the only GET-only engine; trawl and FlareSolverr both take POST.
 export function solverSupportsPost(): boolean {
-  return SOLVERS.some((s) => s.kind === "flaresolverr");
+  return SOLVERS.some((s) => s.kind !== "byparr");
 }
 
 function hostOf(url: string): string {
@@ -236,7 +245,7 @@ async function callSolver(
 }
 
 function solverOrder(host: string, cmd: "request.get" | "request.post"): Solver[] {
-  const usable = cmd === "request.post" ? SOLVERS.filter((s) => s.kind === "flaresolverr") : SOLVERS;
+  const usable = cmd === "request.post" ? SOLVERS.filter((s) => s.kind !== "byparr") : SOLVERS;
   const win = preferred.get(host);
   // A solver the host keeps rejecting goes last instead of burning the budget
   // ahead of the one that still works there.
