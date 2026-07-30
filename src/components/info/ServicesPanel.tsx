@@ -37,8 +37,17 @@ function ProbeRow({
   );
 }
 
+function HostPill({ host, right }: { host: string; right: string }) {
+  return (
+    <span className="rounded-md border border-border bg-elevated px-2 py-0.5 text-[11px] tabular-nums text-muted">
+      {host} <span className="text-text">{right}</span>
+    </span>
+  );
+}
+
 export default function ServicesPanel({ services }: { services: ServicesSnapshot }) {
-  const { suwayomi, solvers, front, storage, database, app } = services;
+  const { suwayomi, solvers, solverEngines, front, storage, database, app } = services;
+  const anySolve = solverEngines.engines.some((e) => e.ok + e.fail > 0);
   const cacheUsage = storage.imageCache.budgetBytes
     ? (storage.imageCache.bytes / storage.imageCache.budgetBytes) * 100
     : 0;
@@ -51,6 +60,55 @@ export default function ServicesPanel({ services }: { services: ServicesSnapshot
           <ProbeRow key={s.name} {...s} />
         ))}
         <ProbeRow {...front} />
+      </Card>
+
+      <Card title="Motores de desafio" className="lg:col-span-2">
+        {anySolve ? (
+          <div className="space-y-4">
+            {solverEngines.engines.map((e) => (
+              <div key={e.kind}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium capitalize text-text">{e.kind}</span>
+                    <Pill tone={toneFor(e.successRate == null ? null : 100 - e.successRate, 25, 60)}>
+                      {pct(e.successRate)} de acerto
+                    </Pill>
+                  </div>
+                  <p className="text-[11px] tabular-nums text-muted">
+                    {count(e.ok)} acertos · {count(e.fail)} falhas ·{" "}
+                    {e.avgMs == null ? "—" : `${count(e.avgMs)} ms`}
+                  </p>
+                </div>
+                <Bar
+                  value={e.successRate ?? 0}
+                  tone={toneFor(e.successRate == null ? null : 100 - e.successRate, 25, 60)}
+                  className="mt-1.5"
+                />
+                {e.worstHosts.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {e.worstHosts.map((h) => (
+                      <HostPill key={h.host} host={h.host} right={`${h.fail} falhas`} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+            {solverEngines.hosts.length > 0 && (
+              <div className="border-t border-border/60 pt-3">
+                <p className="mb-1.5 text-[11px] text-muted">Quem está vencendo em cada site</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {solverEngines.hosts.map((h) => (
+                    <HostPill key={h.host} host={h.host} right={h.winner ?? "ninguém"} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted">
+            Nenhum desafio resolvido ainda — o placar aparece depois das primeiras buscas.
+          </p>
+        )}
       </Card>
 
       <Card title="Engine (Suwayomi)">

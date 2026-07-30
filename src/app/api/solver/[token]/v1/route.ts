@@ -10,6 +10,11 @@ import { flareEnabled, flareSolve, getClearance } from "@/lib/scrapers/flare";
 
 export const runtime = "nodejs";
 
+// setUserAgent(solution.userAgent) is global in Suwayomi, not per host, so an
+// empty string here would blank the engine's identity for every source.
+const FALLBACK_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
+
 const TOKEN = process.env.SOLVER_PROXY_TOKEN || "";
 
 // Suwayomi drops the call at its own flareSolverrTimeout and logs a stack
@@ -83,18 +88,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ token: str
       signal: req.signal,
     });
     const clearance = getClearance(target);
+    const cookies = clearance
+      ? clearance.cookie.split("; ").flatMap((pair) => {
+          const i = pair.indexOf("=");
+          if (i <= 0) return [];
+          return [{ name: pair.slice(0, i), value: pair.slice(i + 1), domain: host, path: "/" }];
+        })
+      : [];
     return ok({
+      // No cookie for this host means no challenge was actually seen, so tell
+      // Suwayomi "not detected" instead of "resolved": it then uses this HTML
+      // as-is instead of replaying the original request with no cookie, which
+      // would just draw the same 403 again.
+      ...(cookies.length ? {} : { message: "Challenge not detected" }),
       solution: {
         url: target,
         status: 200,
-        cookies: clearance
-          ? clearance.cookie.split("; ").flatMap((pair) => {
-              const i = pair.indexOf("=");
-              if (i <= 0) return [];
-              return [{ name: pair.slice(0, i), value: pair.slice(i + 1), domain: host, path: "/" }];
-            })
-          : [],
-        userAgent: clearance?.userAgent ?? "",
+        cookies,
+        userAgent: clearance?.userAgent || FALLBACK_UA,
         headers: {},
         response: html,
       },

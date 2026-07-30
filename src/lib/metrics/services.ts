@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { prisma } from "@/lib/db";
+import { solverMemorySnapshot } from "@/lib/scrapers/solverMemory";
 import { listExtensions, listSources } from "@/lib/suwayomi";
 import { findHostProcess } from "./host";
 
@@ -151,6 +152,28 @@ async function solverProbes(): Promise<Probe[]> {
           if (res?.ok) return "online";
           throw new Error(res ? `HTTP ${res.status}` : "sem resposta");
         }
+        // trawl reports its browser pool instead of a version, and that
+        // occupancy is what says whether a solve would queue.
+        if (name === "trawl") {
+          const res = await fetch(`${base}/health`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(5_000),
+          }).catch(() => null);
+          if (!res?.ok) throw new Error(res ? `HTTP ${res.status}` : "sem resposta");
+          const body = (await res.json().catch(() => ({}))) as {
+            status?: unknown;
+            pool?: { total?: unknown; available?: unknown; restarts?: unknown };
+          };
+          const pool = body.pool ?? {};
+          const parts: string[] = [];
+          if (typeof pool.available === "number" && typeof pool.total === "number") {
+            parts.push(`pool ${pool.available}/${pool.total} livre`);
+          }
+          if (typeof pool.restarts === "number" && pool.restarts > 0) {
+            parts.push(`${pool.restarts} reinícios`);
+          }
+          return parts.length ? parts.join(" · ") : String(body.status || "healthy");
+        }
         const health = await fetch(`${base}/health`, {
           cache: "no-store",
           signal: AbortSignal.timeout(15_000),
@@ -168,6 +191,65 @@ async function solverProbes(): Promise<Probe[]> {
       return { name, url: base, ...result };
     }),
   );
+}
+
+// Reads the per-(engine, host) scoreboard the solver gateway keeps on disk, so
+// the panel can answer which engine clears which site without an SSH session.
+// Pure map arithmetic: the panel refreshes every 30s.
+function solverEngineStats() {
+  const snapshot = solverMemorySnapshot();
+  const configured = solverTargets().map((t) => t.name);
+  const perHost = new Map<string, { winner: string | null; at: number; touches: number }>();
+  const perKind = new Map<
+    string,
+    { ok: number; fail: number; msWeight: number; hosts: { host: string; ok: number; fail: number }[] }
+  >();
+  for (const name of configured) {
+    perKind.set(name, { ok: 0, fail: 0, msWeight: 0, hosts: [] });
+  }
+
+  for (const [key, stat] of Object.entries(snapshot)) {
+    const i = key.indexOf("|");
+    if (i < 0) continue;
+    const kind = key.slice(0, i);
+    const host = key.slice(i + 1);
+
+    const agg = perKind.get(kind);
+    if (agg) {
+      agg.ok += stat.ok;
+      agg.fail += stat.fail;
+      agg.msWeight += stat.avgMs * stat.ok;
+      if (stat.fail > 0) agg.hosts.push({ host, ok: stat.ok, fail: stat.fail });
+    }
+
+    const seen = perHost.get(host) ?? { winner: null, at: 0, touches: 0 };
+    seen.touches += stat.ok + stat.fail;
+    if (stat.lastOkAt > seen.at) {
+      seen.winner = kind;
+      seen.at = stat.lastOkAt;
+    }
+    perHost.set(host, seen);
+  }
+
+  const engines = configured.map((kind) => {
+    const agg = perKind.get(kind)!;
+    const total = agg.ok + agg.fail;
+    return {
+      kind,
+      ok: agg.ok,
+      fail: agg.fail,
+      successRate: total ? (agg.ok / total) * 100 : null,
+      avgMs: agg.ok ? Math.round(agg.msWeight / agg.ok) : null,
+      worstHosts: agg.hosts.sort((a, b) => b.fail - a.fail).slice(0, 5),
+    };
+  });
+
+  const hosts = [...perHost.entries()]
+    .sort((a, b) => b[1].touches - a[1].touches)
+    .slice(0, 10)
+    .map(([host, v]) => ({ host, winner: v.winner }));
+
+  return { engines, hosts };
 }
 
 // ---- tunnel ----
@@ -312,6 +394,7 @@ export async function readServices() {
   return {
     suwayomi,
     solvers,
+    solverEngines: solverEngineStats(),
     front,
     storage,
     database,

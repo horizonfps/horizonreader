@@ -3,15 +3,24 @@
 // reused: the clearance cookies ride on plain fetches until the site stops
 // accepting them.
 //
-// Two solver flavors are supported because neither wins alone: FlareSolverr
-// speaks the full API (POST, sessions) and clears some sites Byparr misses,
-// while Byparr drives a stealth Firefox that beats the managed challenges
-// FlareSolverr is fingerprinted on. Both are asked, best-known-first per host,
+// Three solver flavors are supported because none wins alone: trawl escalates
+// HTTP -> cached session -> Camoufox browser -> residential proxy, so it is
+// the cheapest first try and speaks POST too; FlareSolverr speaks the full
+// API (POST, sessions) and clears some sites Byparr misses; Byparr drives a
+// stealth Firefox that beats the managed challenges FlareSolverr is
+// fingerprinted on but is GET-only. All are asked, best-known-first per host,
 // and a reply that is still a challenge page counts as a failure.
 
 import { isMuted, recordFail, recordOk } from "@/lib/backbone/sourceStats";
+import {
+  isBenched,
+  lastFailAt,
+  lastWinner,
+  recordSolverFail,
+  recordSolverOk,
+} from "@/lib/scrapers/solverMemory";
 
-type SolverKind = "flaresolverr" | "byparr";
+type SolverKind = "flaresolverr" | "byparr" | "trawl";
 type Solver = { kind: SolverKind; url: string };
 
 const FLARE_TIMEOUT = Number(process.env.FLARE_TIMEOUT_MS || 60_000);
@@ -30,7 +39,13 @@ const SOLVE_GRACE_MS = 5_000;
 // attempt that cannot plausibly finish in what is left is never started.
 const MIN_ATTEMPT_MS = 15_000;
 
-// SOLVERS="flaresolverr@http://flaresolverr:8191,byparr@http://byparr:8191".
+function toKind(kind: string): SolverKind {
+  if (kind === "byparr") return "byparr";
+  if (kind === "trawl") return "trawl";
+  return "flaresolverr";
+}
+
+// SOLVERS="trawl@http://trawl:8191,byparr@http://byparr:8191,flaresolverr@http://flaresolverr:8191".
 // Falls back to the single-solver env pair kept for older deployments.
 function parseSolvers(): Solver[] {
   const raw = (process.env.SOLVERS || "").trim();
@@ -41,14 +56,14 @@ function parseSolvers(): Solver[] {
       const url = rest.join("@").trim().replace(/\/+$/, "");
       const kind = kindRaw.trim().toLowerCase();
       if (!url) continue;
-      out.push({ kind: kind === "byparr" ? "byparr" : "flaresolverr", url });
+      out.push({ kind: toKind(kind), url });
     }
     if (out.length) return out;
   }
   const single = (process.env.FLARESOLVERR_URL || "").trim().replace(/\/+$/, "");
   if (!single) return [];
   const kind = (process.env.SOLVER_KIND || "flaresolverr").toLowerCase();
-  return [{ kind: kind === "byparr" ? "byparr" : "flaresolverr", url: single }];
+  return [{ kind: toKind(kind), url: single }];
 }
 
 const SOLVERS = parseSolvers();
@@ -57,8 +72,6 @@ export type Clearance = { cookie: string; userAgent: string; at: number };
 
 const clearances = new Map<string, Clearance>();
 const inflight = new Map<string, Promise<string>>();
-// Which solver last cleared a host; tried first next time.
-const preferred = new Map<string, SolverKind>();
 
 type Waiter = { grant: () => void; settled: boolean };
 
@@ -70,8 +83,9 @@ export function flareEnabled(): boolean {
 }
 
 // Whether any solver can replay a form POST through the challenge itself.
+// Byparr is the only GET-only engine; trawl and FlareSolverr both take POST.
 export function solverSupportsPost(): boolean {
-  return SOLVERS.some((s) => s.kind === "flaresolverr");
+  return SOLVERS.some((s) => s.kind !== "byparr");
 }
 
 function hostOf(url: string): string {
@@ -86,12 +100,6 @@ function hostOf(url: string): string {
 // piles browser contexts up.
 function breakerKey(host: string): string {
   return `flare:${host}`;
-}
-
-// The engine an IP is fingerprinted on for one host still clears every other
-// host, so the penalty is remembered per solver and host, never globally.
-function solverKey(kind: SolverKind, host: string): string {
-  return `flare:${kind}:${host}`;
 }
 
 export function getClearance(url: string): Clearance | null {
@@ -236,13 +244,18 @@ async function callSolver(
 }
 
 function solverOrder(host: string, cmd: "request.get" | "request.post"): Solver[] {
-  const usable = cmd === "request.post" ? SOLVERS.filter((s) => s.kind === "flaresolverr") : SOLVERS;
-  const win = preferred.get(host);
-  // A solver the host keeps rejecting goes last instead of burning the budget
-  // ahead of the one that still works there.
-  const rank = (s: Solver) =>
-    (isMuted(solverKey(s.kind, host)) ? 2 : 0) + (s.kind === win ? -1 : 0);
-  return [...usable].sort((a, b) => rank(a) - rank(b));
+  const usable = cmd === "request.post" ? SOLVERS.filter((s) => s.kind !== "byparr") : SOLVERS;
+  const free = usable.filter((s) => !isBenched(s.kind, host));
+  if (free.length) {
+    // A benched solver is dropped outright rather than merely deprioritized:
+    // that is the whole point, no browser context spent on one that only
+    // fails here while another still works.
+    const win = lastWinner(host);
+    return win ? [...free].sort((a, b) => Number(b.kind === win) - Number(a.kind === win)) : free;
+  }
+  // Every solver is benched for this host; keep them all so it is never left
+  // with zero attempts, oldest failure (most likely to have recovered) first.
+  return [...usable].sort((a, b) => lastFailAt(a.kind, host) - lastFailAt(b.kind, host));
 }
 
 // Win clearance for a host by solving its landing page, so the caller can
@@ -290,28 +303,41 @@ export async function flareSolve(
     try {
       let lastError: unknown = new Error("solver_failed");
       let attempts = 0;
-      for (const solver of order) {
-        const remaining = deadline - Date.now();
-        if (remaining < MIN_ATTEMPT_MS) {
+      const why: string[] = [];
+      for (const [i, solver] of order.entries()) {
+        const usable = deadline - Date.now() - SOLVE_GRACE_MS;
+        if (usable < MIN_ATTEMPT_MS) {
           lastError = new Error("solver_budget_exhausted");
           break;
         }
+        // A timeout on the first engine used to eat the whole budget, so the
+        // one that actually clears the host was never asked. Each engine still
+        // waiting keeps a minimum attempt reserved for it.
+        const reserve = (order.length - 1 - i) * MIN_ATTEMPT_MS;
+        const share = usable - reserve;
+        const budget = Math.min(FLARE_TIMEOUT, share < MIN_ATTEMPT_MS ? usable : share);
         try {
           attempts += 1;
-          const budget = Math.min(FLARE_TIMEOUT, remaining - SOLVE_GRACE_MS);
           const html = await callSolver(solver, cmd, url, postData, budget, opts.signal);
-          preferred.set(host, solver.kind);
-          recordOk(solverKey(solver.kind, host), Date.now() - started);
+          recordSolverOk(solver.kind, host, Date.now() - started);
           recordOk(breakerKey(host), Date.now() - started);
           return html;
         } catch (e) {
           // A caller that hung up says nothing about the solver or the host.
           if (opts.signal?.aborted) throw e;
-          recordFail(solverKey(solver.kind, host));
+          recordSolverFail(solver.kind, host);
           lastError = e;
+          why.push(`${solver.kind}=${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      if (attempts) recordFail(breakerKey(host));
+      if (attempts) {
+        recordFail(breakerKey(host));
+        // One line, because the log panel folds a broken one into the previous
+        // stack trace.
+        console.warn(
+          `[solver] all engines failed host=${host} ms=${Date.now() - started} ${why.join(" ")}`,
+        );
+      }
       throw lastError;
     } finally {
       release();

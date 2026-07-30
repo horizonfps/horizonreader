@@ -5,7 +5,7 @@
 //   npm run sync-extensions              install en + pt-BR + all
 //   npm run sync-extensions -- --langs pt-BR
 //   npm run sync-extensions -- --dry-run
-//   npm run sync-extensions -- --nsfw    include adult-flagged extensions
+//   npm run sync-extensions -- --no-nsfw  skip adult-flagged extensions
 
 import {
   listExtensions,
@@ -16,7 +16,9 @@ import {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
-const withNsfw = args.includes("--nsfw");
+// Adult-flagged extensions ship by default. One +18 title flags a whole scan,
+// which was costing 77 of the 113 pt-BR sources.
+const withNsfw = !args.includes("--no-nsfw");
 const langArg = args[args.indexOf("--langs") + 1];
 const LANGS = new Set(
   (args.includes("--langs") && langArg ? langArg : "en,pt-BR,pt,all")
@@ -33,7 +35,7 @@ function wanted(e: SuwayomiExtension): boolean {
 }
 
 async function main() {
-  console.log(`langs: ${[...LANGS].join(", ")}${withNsfw ? " (+nsfw)" : ""}`);
+  console.log(`langs: ${[...LANGS].join(", ")}${withNsfw ? " (+nsfw)" : " (sfw only)"}`);
 
   await fetchExtensions().catch((e) => console.warn("refresh repo index failed:", String(e)));
 
