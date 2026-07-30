@@ -11,6 +11,10 @@ const CONCURRENCY = Number(process.argv[3] ?? 2);
 const MODE = process.argv[4] ?? "v1";
 const BUDGET_MS = 60_000;
 
+// What a browser in Brazil sends. toonlivre.net reads this and 302s anyone else
+// to a host that no longer resolves, so the default en-US reads as a dead site.
+const HEADERS = { "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" };
+
 const TARGETS = [
   // comick.io -> comick.dev and valirscans.com -> valirscans.org are permanent
   // moves. Pointed at the old host, trawl intermittently hands back the 301
@@ -34,9 +38,7 @@ const TARGETS = [
   ["luacomic", "https://luacomic.org/?s=solo"],
   ["frieren", "https://www.frieren.online/?s=solo"],
   ["housesaikai", "https://housesaikai.net/?s=solo"],
-  // toonlivre.net redirects to www.mangalivre.net, which is NXDOMAIN; the live
-  // destination is the same host without the www.
-  ["toonlivre", "https://mangalivre.net/"],
+  ["toonlivre", "https://toonlivre.net/"],
   ["risentoons", "https://risentoons.xyz/?s=solo"],
   ["mangastop", "https://mangastop.net/?s=solo"],
 ];
@@ -69,7 +71,7 @@ async function call(url) {
     const res = await fetch(`${SOLVER}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, maxTimeout: BUDGET_MS, skipHttp: true }),
+      body: JSON.stringify({ url, maxTimeout: BUDGET_MS, skipHttp: true, headers: HEADERS }),
       signal: AbortSignal.timeout(BUDGET_MS + 30_000),
     });
     if (!res.ok) return { fail: `solver_${res.status}` };
@@ -82,7 +84,7 @@ async function call(url) {
   const res = await fetch(`${SOLVER}/v1`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cmd: "request.get", url, maxTimeout: BUDGET_MS }),
+    body: JSON.stringify({ cmd: "request.get", url, maxTimeout: BUDGET_MS, headers: HEADERS }),
     signal: AbortSignal.timeout(BUDGET_MS + 20_000),
   });
   if (!res.ok) return { fail: `solver_${res.status}` };
