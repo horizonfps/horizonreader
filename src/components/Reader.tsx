@@ -25,6 +25,13 @@ const MAX_RETRIES = 4;
 const RETRY_BASE_MS = 500;
 // Pages pulled ahead of the viewport so scrolling doesn't wait on the network.
 const PRELOAD_AHEAD = 4;
+// Past this fraction of the chapter, the next chapter gets prepared in the
+// background so the next-chapter link opens instantly.
+const NEXT_CHAPTER_AT = 0.7;
+const NEXT_CHAPTER_PAGES = 3;
+// A prefetched dynamic route payload is only kept ~30s client-side
+// (next.config.mjs's staleTimes.dynamic), so the prefetch is repeated.
+const REPREFETCH_EVERY_MS = 25_000;
 
 function retryUrl(url: string, attempt: number): string {
   if (attempt === 0) return url;
@@ -141,6 +148,8 @@ export default function Reader({
   // Saving is disarmed until the resume scroll settles, so the observer can't
   // overwrite stored progress with a low index while jumping to initialPage.
   const armedRef = useRef(initialPage <= 0);
+  const warmedNextRef = useRef(false);
+  const lastNextPrefetchRef = useRef(0);
 
   // load persisted settings
   useEffect(() => {
@@ -275,6 +284,34 @@ export default function Reader({
       img.src = pageUrls[i];
     }
   }, [page, total, pageUrls]);
+
+  // Past NEXT_CHAPTER_AT, warm the next chapter's route plus its first pages,
+  // so the chapter switch has no black-screen wait.
+  useEffect(() => {
+    if (!nextChapterId || total === 0) return;
+    if ((page + 1) / total < NEXT_CHAPTER_AT) return;
+    const conn = (navigator as { connection?: { saveData?: boolean } }).connection;
+    if (conn?.saveData) return;
+
+    const now = Date.now();
+    if (now - lastNextPrefetchRef.current >= REPREFETCH_EVERY_MS) {
+      lastNextPrefetchRef.current = now;
+      router.prefetch(`/reader/${nextChapterId}`);
+    }
+
+    if (warmedNextRef.current) return;
+    warmedNextRef.current = true;
+    fetch(`/api/chapter-pages?id=${nextChapterId}&limit=${NEXT_CHAPTER_PAGES}`)
+      .then((r) => r.json())
+      .then((d: { urls?: string[] }) => {
+        for (const url of d.urls ?? []) {
+          const img = new window.Image();
+          img.decoding = "async";
+          img.src = url;
+        }
+      })
+      .catch(() => {});
+  }, [page, total, nextChapterId, router]);
 
   const goNextPage = useCallback(() => {
     setPage((p) => {

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import sharp from "sharp";
 import { getSession } from "@/lib/session";
 import { getCachedImage, setCachedImage } from "@/lib/imageCache";
 import { getDiskImage, setDiskImage } from "@/lib/diskCache";
+import { shrinkCover } from "@/lib/coverImage";
 
 export const runtime = "nodejs";
 
@@ -22,22 +22,6 @@ const UA = "horizonreader/1.0";
 
 function isAllowedHost(host: string): boolean {
   return ALLOWED_HOSTS.has(host) || host.endsWith(".comick.pictures");
-}
-
-// Re-encodes a cover to WebP before it hits any cache tier, so the disk tier
-// stores one small, uniform format regardless of what the source served.
-async function toWebp(
-  body: Uint8Array,
-  fallbackContentType: string,
-): Promise<{ body: Uint8Array; contentType: string }> {
-  try {
-    const out = await sharp(body).webp({ quality: 80 }).toBuffer();
-    return { body: new Uint8Array(out), contentType: "image/webp" };
-  } catch {
-    // Not a raster image sharp understands (or a decode failure): keep the
-    // original bytes rather than fail the request.
-    return { body, contentType: fallbackContentType };
-  }
 }
 
 // Host-whitelisted image proxy: the browser never hits MangaDex/Comick directly.
@@ -60,7 +44,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "forbidden_host" }, { status: 400 });
   }
 
-  const cacheKey = target.toString();
+  // Versioned so a format change here never serves stale bytes from before it.
+  const cacheKey = `cover:v1:${target.toString()}`;
   const hit = getCachedImage(cacheKey);
   if (hit) {
     return new NextResponse(new Uint8Array(hit.body), {
@@ -69,7 +54,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const cold = await getDiskImage(cacheKey);
+  const cold = await getDiskImage(cacheKey, "cover");
   if (cold) {
     setCachedImage(cacheKey, cold.body, cold.contentType);
     return new NextResponse(new Uint8Array(cold.body), {
@@ -95,10 +80,10 @@ export async function GET(req: NextRequest) {
 
     const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
     const rawBody = new Uint8Array(await upstream.arrayBuffer());
-    const { body, contentType } = await toWebp(rawBody, upstreamContentType);
+    const { body, contentType } = await shrinkCover(rawBody, upstreamContentType);
 
     setCachedImage(cacheKey, body, contentType);
-    void setDiskImage(cacheKey, body, contentType);
+    void setDiskImage(cacheKey, body, contentType, "cover");
 
     return new NextResponse(new Uint8Array(body), {
       status: 200,

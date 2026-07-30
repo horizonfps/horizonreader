@@ -10,6 +10,10 @@ const CONCURRENCY = 4;
 const QUEUE_CAP = 200;
 const MDX_COOLDOWN_MS = 6 * 3_600_000;
 const COMICK_COOLDOWN_MS = 24 * 3_600_000;
+// Each Comick item resolved here calls searchMangaDex, which rides MangaDex's
+// serial 220ms gate. A cold-start home can hand this hundreds of items at
+// once; capping it per call keeps that gate free for real user requests.
+const COMICK_PER_CALL_CAP = 30;
 
 type Job = { key: string; run: () => Promise<unknown> };
 
@@ -57,9 +61,12 @@ export function indexBackboneWorks(works: BackboneWork[]): void {
 // MangaDex entry and applies content policy); upsertWork direct would create
 // duplicate works with poor alt titles.
 export function indexComickItems(items: SectionItem[]): void {
+  let queuedThisCall = 0;
   for (const it of items) {
+    if (queuedThisCall >= COMICK_PER_CALL_CAP) break;
     if (it.origin !== "comick" || it.localSlug || !it.externalId) continue;
     if (isBlocked({ genres: it.genres, contentRating: it.contentRating })) continue;
+    queuedThisCall += 1;
     enqueue(`${it.origin}:${it.externalId}`, COMICK_COOLDOWN_MS, () =>
       resolveWorkFromRef({
         origin: "comick",
