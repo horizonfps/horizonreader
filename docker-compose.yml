@@ -10,10 +10,12 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET in .env}
       DATABASE_URL: file:/data/app.db
       SUWAYOMI_URL: http://suwayomi:4567
-      # Solver pool, tried in order and remembered per host. FlareSolverr owns
-      # POST and clears some sites Byparr misses; Byparr beats the managed
-      # challenges FlareSolverr is fingerprinted on.
-      SOLVERS: ${SOLVERS:-flaresolverr@http://flaresolverr:8191,byparr@http://byparr:8191}
+      # Solver pool, tried in order and remembered per host. trawl escalates
+      # HTTP -> cached session -> Camoufox -> residential proxy and is the
+      # cheapest first try; FlareSolverr owns POST and clears some sites
+      # Byparr misses; Byparr beats the managed challenges FlareSolverr is
+      # fingerprinted on.
+      SOLVERS: ${SOLVERS:-trawl@http://trawl:8191,byparr@http://byparr:8191,flaresolverr@http://flaresolverr:8191}
       # Shared secret in the path of the solver facade Suwayomi calls.
       SOLVER_PROXY_TOKEN: ${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}
       # Uploaded avatars/banners live on the mounted data volume.
@@ -23,9 +25,10 @@ services:
       IMAGE_CACHE_DIR: /data/imgcache
       IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-8192}
       IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-512}
-      # Each concurrent solve is one Chromium context, so this is the knob that
-      # decides how much CPU/RAM FlareSolverr can take.
-      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-2}
+      # Each concurrent solve is one browser context, so this is the knob that
+      # decides how much CPU/RAM the solver pool can take. Bumped for the
+      # third engine: trawl's first level is a cheap plain GET, not a browser.
+      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-3}
       FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-8}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
@@ -45,6 +48,7 @@ services:
     depends_on:
       - suwayomi
       - dockerproxy
+      - trawl
     networks:
       - manga
 
@@ -97,10 +101,68 @@ services:
       FLARESOLVERR_TIMEOUT: "60"
       FLARESOLVERR_SESSION_NAME: "suwayomi"
       FLARESOLVERR_SESSION_TTL: "15"
+      FLARESOLVERR_RESPONSE_AS_FALLBACK: "${FLARESOLVERR_RESPONSE_AS_FALLBACK:-true}"
     volumes:
       # Order matters: downloads must be mounted before the data dir.
       - ./suwayomi/downloads:/home/suwayomi/.local/share/Tachidesk/downloads
       - ./suwayomi/data:/home/suwayomi/.local/share/Tachidesk
+    networks:
+      - manga
+
+  # ---- Session cache for trawl. A repeat request to the same host replays in
+  #      ~500ms off cached cookies instead of booting a browser. No volume:
+  #      the session cookie is disposable, so persisting it to disk would only
+  #      be overlay writes for nothing. ----
+  redis:
+    image: redis:8-alpine
+    container_name: manga-redis
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
+    expose:
+      - "6379"
+    mem_limit: ${REDIS_MEM:-256m}
+    networks:
+      - manga
+
+  # ---- First solver tried: escalates HTTP -> cached session (Redis) ->
+  #      Camoufox browser -> residential proxy, so most hosts never pay for a
+  #      browser boot at all. Speaks the same /v1 endpoint as FlareSolverr and
+  #      answers both request.get and request.post. ----
+  trawl:
+    image: ghcr.io/germondai/trawl:latest
+    container_name: trawl
+    restart: unless-stopped
+    # Same reason as byparr: without this, Camoufox/Firefox dies with a
+    # multiprocessing.synchronize error on OCI/LXC hosts.
+    shm_size: 1gb
+    depends_on:
+      - redis
+    environment:
+      TZ: America/Sao_Paulo
+      REDIS_URL: redis://redis:6379
+      # Warm browsers; the real RAM knob.
+      BROWSER_POOL_SIZE: ${TRAWL_POOL_SIZE:-2}
+      BROWSER_CONTENT_PROCESSES: "2"
+      BROWSER_RECYCLE_AFTER_CONTEXTS: "8"
+      SESSION_TTL_SECONDS: ${TRAWL_SESSION_TTL:-3600}
+      # Level 3 (datacenter) and level 4 (residential) proxies, empty by
+      # default. The VPS's own IP is what gets banned; filling these in is the
+      # only real fix for that, not a config knob to tune for free.
+      PROXY_URL: ${PROXY_URL:-}
+      PROXY_LIST_FILE: ${PROXY_LIST_FILE:-}
+      RESIDENTIAL_PROXY_URL: ${RESIDENTIAL_PROXY_URL:-}
+      RESIDENTIAL_PROXY_LIST_FILE: ${RESIDENTIAL_PROXY_LIST_FILE:-}
+      MITM_PROXY_ENABLED: "false"
+    expose:
+      - "8191"
+    # Static status endpoint, unlike Byparr's, which drives a real browser.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8191/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    mem_limit: ${TRAWL_MEM:-2560m}
     networks:
       - manga
 
@@ -146,8 +208,8 @@ services:
     networks:
       - manga
 
-  # ---- Second solver: the only one that can POST through a challenge, and it
-  #      still clears sites Byparr reports as solved but is not. ----
+  # ---- Third solver, tried last: not GET-only like Byparr, and still clears
+  #      sites Byparr reports as solved but is not. ----
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:v3.5.0
     container_name: flaresolverr

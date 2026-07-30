@@ -30,13 +30,16 @@ docker compose up -d --build web
 
 - Teste local: http://localhost:41573
 - Admin do Suwayomi (extensões / fontes): http://localhost:4567 (só localhost).
-- Os dois solvers de desafio (FlareSolverr e Byparr) sobem junto com o resto.
-  Nenhum vence sozinho: o FlareSolverr é o único que faz POST atravessando o
-  desafio, o Byparr limpa os *managed challenges* em que o FlareSolverr é
-  detectado. O app tenta os dois e lembra qual funcionou por host.
-  `SOLVER_PROXY_TOKEN` no `.env` é obrigatório: é o segredo no caminho de
-  `/api/solver/<token>/v1`, a fachada que o Suwayomi usa para também ganhar o
-  fallback (ele só aceita um `FLARESOLVERR_URL`).
+- Os três motores de desafio (trawl, Byparr e FlareSolverr) sobem junto com o
+  resto, nessa ordem. Nenhum vence sozinho: o trawl escalona
+  HTTP puro → sessão em cache no Redis → navegador Camoufox → proxy
+  residencial, e é o primeiro a ser tentado por ser o mais barato; o Byparr
+  limpa os *managed challenges* em que o FlareSolverr é detectado, mas só faz
+  GET; o FlareSolverr é o último recurso. O app tenta os três, na ordem, e
+  lembra qual funcionou por host. `SOLVER_PROXY_TOKEN` no `.env` é
+  obrigatório: é o segredo no caminho de `/api/solver/<token>/v1`, a fachada
+  que o Suwayomi usa para também ganhar o fallback (ele só aceita um
+  `FLARESOLVERR_URL`).
 
 ## 1.1 Instalar as fontes do Suwayomi
 
@@ -107,3 +110,11 @@ O painel é somente leitura: nenhuma rota escreve ou reinicia nada.
 ```
 docker compose up -d --build web
 ```
+
+Quando o `docker-compose.yml` ganha serviço novo (caso do trawl e do Redis
+dele), esse `web` no fim não basta — sobe só o app e o serviço novo nunca
+nasce. Rode `docker compose up -d --build` sem nomear serviço.
+
+**Atenção:** se o `.env` da VPS já define `SOLVERS`, ele vence o default do
+compose e precisa ganhar o `trawl` na frente, senão o motor novo sobe e nunca
+é chamado.
