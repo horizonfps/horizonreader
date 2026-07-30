@@ -72,7 +72,9 @@ async function call(url) {
     if (!res.ok) return { fail: `solver_${res.status}` };
     const j = await res.json();
     if (typeof j.html !== "string") return { fail: (j.error ?? "scrape_failed").slice(0, 120) };
-    return { html: j.html, code: j.statusCode ?? 0, tier: j.tier };
+    // A JSON source comes back inside Firefox's plaintext viewer, same shape
+    // FlareSolverr produces, so it needs the same unwrap the facade does.
+    return { html: unwrapPre(j.html), code: j.statusCode ?? 0, tier: j.tier };
   }
   const res = await fetch(`${SOLVER}/v1`, {
     method: "POST",
@@ -111,8 +113,12 @@ async function probe(name, url) {
     if (html.length < 1024) {
       return { name, url, ms, code, kb, verdict: "VAZIO", why: `${html.length} bytes` };
     }
+    // A JSON body is the answer for the API-backed sources, and the SPA ones
+    // ship their catalogue through JS, so neither carries anchors to count.
+    const trimmed = html.trimStart();
+    const isJson = trimmed.startsWith("{") || trimmed.startsWith("[");
     const links = (html.match(/<a\s[^>]*href=/gi) ?? []).length;
-    if (links < 5) {
+    if (!isJson && links < 5 && html.length < 10_240) {
       return { name, url, ms, code, kb, verdict: "SEM-CONTEUDO", why: `${links} links` };
     }
     return {
