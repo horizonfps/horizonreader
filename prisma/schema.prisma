@@ -100,6 +100,7 @@ model SourceLink {
   createdAt      DateTime         @default(now())
   work           Work             @relation(fields: [workId], references: [id], onDelete: Cascade)
   scrapedChapters ScrapedChapter[]
+  chapterCache   ChapterListCache?
 
   @@unique([sourceId, sourceMangaId])
   @@index([workId])
@@ -120,6 +121,16 @@ model ScrapedChapter {
 
   @@unique([sourceLinkId, chapterKey])
   @@index([sourceLinkId])
+}
+
+// Persisted chapter list for Suwayomi-backed links, so the work page paints
+// instantly on restart while the real list revalidates in the background.
+model ChapterListCache {
+  id           Int        @id @default(autoincrement())
+  sourceLinkId Int        @unique
+  payload      String // JSON array of chapters, as served to the page
+  fetchedAt    DateTime   @default(now())
+  sourceLink   SourceLink @relation(fields: [sourceLinkId], references: [id], onDelete: Cascade)
 }
 
 // Per-user favorite/library entry with reading status.
