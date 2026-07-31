@@ -13,7 +13,14 @@ import {
 } from "@/lib/backbone/normalize";
 import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
-import { isMuted, partitionByHealth, recordFail, recordOk } from "@/lib/backbone/sourceStats";
+import {
+  isMuted,
+  partitionByHealth,
+  recordFail,
+  recordHit,
+  recordOk,
+  recordTry,
+} from "@/lib/backbone/sourceStats";
 import { acquireEngineSlot } from "@/lib/backbone/engineGate";
 import {
   searchMangaDex,
@@ -120,18 +127,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Bounded-concurrency worker pool that stops handing out work past a deadline.
-// Returns what it never got to, so the caller can finish the sweep off the
-// request path instead of silently dropping those sources.
+// Bounded-concurrency worker pool that stops handing out work past a deadline
+// or once `stop` says the caller has what it needs. Returns what it never got
+// to, so the caller can finish the sweep off the request path instead of
+// silently dropping those sources.
 async function runPool<T>(
   items: T[],
   limit: number,
   deadline: number,
   fn: (item: T) => Promise<void>,
+  stop?: () => boolean,
 ): Promise<T[]> {
   let next = 0;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length && Date.now() < deadline) {
+    while (next < items.length && Date.now() < deadline && !stop?.()) {
       const item = items[next++];
       await fn(item).catch(() => {});
     }
@@ -249,7 +258,18 @@ export async function upsertWork(bw: BackboneWork): Promise<{ id: number; create
 
 // ---- resolveSourcesForWork ----
 
-async function syncMatch(source: SuwayomiSource, workId: number, result: SuwayomiManga) {
+// Links landed so far in one resolve. The foreground sweep stops handing out
+// sources once it fills; the rest still get searched, just off the request path.
+type Coverage = { hits: number };
+
+const ENOUGH_LINKS = 3;
+
+async function syncMatch(
+  source: SuwayomiSource,
+  workId: number,
+  result: SuwayomiManga,
+  coverage?: Coverage,
+) {
   try {
     await refreshManga(result.id).catch(() => {});
     const [manga, chapters] = await Promise.all([
@@ -294,6 +314,8 @@ async function syncMatch(source: SuwayomiSource, workId: number, result: Suwayom
       },
       update: { workId, sourceName, lang, url, chapterCount, latestAt, healthScore, lastSyncedAt: now },
     });
+    recordHit(source.id);
+    if (coverage) coverage.hits += 1;
   } catch (e) {
     console.warn(`[resolve] syncMatch failed (source ${source.id}, manga ${result.id})`, e);
   }
@@ -332,11 +354,12 @@ async function searchAndMatch(
   query: string,
   titles: string[],
   budgetMs: number,
+  coverage?: Coverage,
 ): Promise<boolean> {
   const { mangas } = await browseSource(source.id, "SEARCH", 1, query, budgetMs);
   const match = bestCandidate(mangas ?? [], titles);
   if (!match) return false;
-  await syncMatch(source, workId, match);
+  await syncMatch(source, workId, match, coverage);
   return true;
 }
 
@@ -346,6 +369,7 @@ async function processSource(
   queries: string[],
   titles: string[],
   deadline: number,
+  coverage?: Coverage,
 ) {
   // Try each query in order (English first, then localized alt titles) until a
   // match lands. pt-BR scan sites index by the Portuguese title, so an English
@@ -363,9 +387,10 @@ async function processSource(
       slot.release();
       return;
     }
+    recordTry(source.id);
     try {
       const hit = await withTimeout(
-        searchAndMatch(source, workId, query, titles, budget),
+        searchAndMatch(source, workId, query, titles, budget, coverage),
         budget,
       );
       recordOk(source.id, Date.now() - started);
@@ -388,6 +413,7 @@ async function processScraper(
   queries: string[],
   titles: string[],
   ref: { origin: string; externalId: string },
+  coverage?: Coverage,
 ) {
   try {
     // A source that can be addressed by the backbone id skips title matching
@@ -447,6 +473,8 @@ async function processScraper(
       where: { id: link.id },
       data: { chapterCount: count, latestAt, healthScore, lastSyncedAt: new Date() },
     });
+    recordHit(scraper.id);
+    if (coverage) coverage.hits += 1;
   } catch (e) {
     console.warn(`[resolve] processScraper failed (source ${scraper.id})`, e);
   }
@@ -565,25 +593,38 @@ async function doResolveSourcesForWork(
   }
   // Only English and Brazilian-Portuguese scan sources are relevant. Searching all
   // ~250 (every language) overloads Suwayomi and causes timeout-induced misses.
-  // Adult-flagged sources are dropped too: the content policy blocks their works
-  // from ever rendering, so searching them only burns solver time.
-  const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)) && !s.isNsfw);
-  const targets = wanted.length ? wanted : sources.filter((s) => !s.isNsfw);
+  const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
+  const targets = wanted.length ? wanted : sources;
 
   // Solver-backed scrapers cost tens of seconds, so they run detached: the page
   // never waits on them and their links show up on the next poll. Muted sources
   // are swept after the healthy ones, off the clock.
   runScraperLane(workId, queries, titles, ref);
 
-  const { live, muted } = partitionByHealth(targets);
+  // Adult-flagged sources stay in the catalogue but go last: the flag marks the
+  // whole site, not the work, so they are a real fallback for a normal title
+  // nothing else carries. Ordered behind the rest, the sweep reaches them only
+  // when it has to.
+  const sfw = partitionByHealth(targets.filter((s) => !s.isNsfw));
+  const adult = partitionByHealth(targets.filter((s) => s.isNsfw));
+  const live = [...sfw.live, ...adult.live];
+  const muted = [...sfw.muted, ...adult.muted];
   const deadline = Date.now() + SWEEP_DEADLINE_MS;
+  // Best sources go first, so a handful of links usually lands in the first
+  // seconds. Once they do, asking the remaining hundreds buys the reader
+  // nothing, and every one of those asks can cost a browser-based solve.
+  const coverage: Coverage = { hits: 0 };
   const [pending] = await Promise.all([
-    runPool(live, SEARCH_CONCURRENCY, deadline, (s) =>
-      processSource(s, workId, queries, titles, deadline),
+    runPool(
+      live,
+      SEARCH_CONCURRENCY,
+      deadline,
+      (s) => processSource(s, workId, queries, titles, deadline, coverage),
+      () => coverage.hits >= ENOUGH_LINKS,
     ),
     // Plain-API sources answer in a second and are the most reliable link a
     // work can get, so they are worth blocking the first paint on.
-    runFastScrapers(workId, queries, titles, ref),
+    runFastScrapers(workId, queries, titles, ref, coverage),
   ]);
 
   await pruneDuplicateLinks(workId);
@@ -611,10 +652,12 @@ async function runScraper(
   titles: string[],
   ref: { origin: string; externalId: string },
   timeoutMs: number,
+  coverage?: Coverage,
 ): Promise<void> {
   const started = Date.now();
+  recordTry(scraper.id);
   try {
-    await withTimeout(processScraper(scraper, workId, queries, titles, ref), timeoutMs);
+    await withTimeout(processScraper(scraper, workId, queries, titles, ref, coverage), timeoutMs);
     recordOk(scraper.id, Date.now() - started);
   } catch {
     recordFail(scraper.id);
@@ -627,13 +670,16 @@ async function runFastScrapers(
   queries: string[],
   titles: string[],
   ref: { origin: string; externalId: string },
+  coverage?: Coverage,
 ): Promise<void> {
   const scrapers = SCRAPERS.filter(
     (s) => !s.heavy && PREFERRED_LANGS.has(normLang(s.lang)) && !isMuted(s.id),
   );
   if (!scrapers.length) return;
   await Promise.allSettled(
-    scrapers.map((s) => runScraper(s, workId, queries, titles, ref, FAST_SCRAPER_TIMEOUT)),
+    scrapers.map((s) =>
+      runScraper(s, workId, queries, titles, ref, FAST_SCRAPER_TIMEOUT, coverage),
+    ),
   );
 }
 

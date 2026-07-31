@@ -2,10 +2,11 @@
 // sweep has something to search. A fresh engine ships with none, and a manually
 // curated set drifts (production had zero pt-BR sources).
 //
-//   npm run sync-extensions              install en + pt-BR, no adult sources
+//   npm run sync-extensions              install every en + pt-BR source
+//   npm run sync-extensions -- --prune   also remove what fell out of scope
 //   npm run sync-extensions -- --langs pt-BR
 //   npm run sync-extensions -- --dry-run
-//   npm run sync-extensions -- --nsfw    include adult-flagged extensions
+//   npm run sync-extensions -- --no-nsfw skip adult-flagged extensions
 
 import {
   listExtensions,
@@ -20,10 +21,10 @@ const dryRun = args.includes("--dry-run");
 // Removes installed extensions outside the wanted set, so tightening the filter
 // actually shrinks the sweep instead of only affecting the next install.
 const prune = args.includes("--prune");
-// Adult sources are opt-in: the content policy blocks their works from ever
-// rendering, so installing them only adds engine load. They were 376 of the 633
-// sources the sweep searched, and that backlog is what stalled the engine.
-const withNsfw = args.includes("--nsfw");
+// Adult-flagged extensions ship by default. The flag marks the whole site, not
+// the work, so dropping them costs 77 of the 137 pt-BR sources; the sweep
+// deprioritizes them instead of skipping them.
+const withNsfw = !args.includes("--no-nsfw");
 const langArg = args[args.indexOf("--langs") + 1];
 const LANGS = new Set(
   (args.includes("--langs") && langArg ? langArg : "en,pt-BR,pt")
