@@ -55,8 +55,10 @@ const FAST_SCRAPER_TIMEOUT = 12_000;
 // as the slowest extension, which is where the multi-minute waits came from.
 const SWEEP_DEADLINE_MS = 20_000;
 // The pass that runs after the page is served has no reader waiting on it, so
-// it can afford to reach every remaining source.
-const BACKGROUND_SWEEP_MS = 180_000;
+// it can afford to reach every remaining source. The engine gate bounds what
+// this costs; three minutes only covered a fraction of the catalogue, which
+// left works resolving to nothing until someone opened them again.
+const BACKGROUND_SWEEP_MS = 600_000;
 // Per-work fan-out. The real ceiling is the process-wide engine gate, so this
 // only needs to keep the gate fed; a wider pool would just claim sources it
 // then drops at the deadline without ever searching them.
@@ -628,6 +630,9 @@ async function doResolveSourcesForWork(
 
   await pruneDuplicateLinks(workId);
   await promotePrimary(workId);
+  console.info(
+    `[resolve] work ${workId}: ${coverage.hits} links from ${live.length - pending.length}/${live.length} sources, ${pending.length + muted.length} deferred`,
+  );
 
   // Whatever the render budget could not reach still gets searched, just never
   // in front of the reader. It is how a work ends up with every source it has
