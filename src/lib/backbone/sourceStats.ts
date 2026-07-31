@@ -5,6 +5,8 @@
 type Stat = {
   ok: number;
   fail: number;
+  hits: number;
+  tries: number;
   streak: number;
   avgMs: number;
   mutedUntil: number;
@@ -21,8 +23,29 @@ const stats = new Map<string, Stat>();
 
 function statFor(id: string): Stat {
   let s = stats.get(id);
-  if (!s) stats.set(id, (s = { ok: 0, fail: 0, streak: 0, avgMs: UNKNOWN_MS, mutedUntil: 0 }));
+  if (!s)
+    stats.set(
+      id,
+      (s = { ok: 0, fail: 0, hits: 0, tries: 0, streak: 0, avgMs: UNKNOWN_MS, mutedUntil: 0 }),
+    );
   return s;
+}
+
+// A source that answers fast but never carries the work is worthless to a
+// sweep that stops at the first few links, so hit rate has to outrank latency.
+export function recordHit(id: string): void {
+  statFor(id).hits += 1;
+}
+
+export function recordTry(id: string): void {
+  statFor(id).tries += 1;
+}
+
+// Laplace-smoothed, so a source never tried yet sits mid-pack instead of
+// leading on an empty record or being buried behind proven ones.
+function hitRate(s: Stat | undefined): number {
+  if (!s) return 0.5;
+  return (s.hits + 1) / (s.tries + 2);
 }
 
 export function isMuted(id: string): boolean {
@@ -49,15 +72,18 @@ export function recordFail(id: string): void {
 }
 
 // Splits into the sources worth blocking a request on and the muted ones, each
-// ordered fastest-first.
+// ordered best-first: the ones that actually carry works, then the fast ones.
 export function partitionByHealth<T extends { id: string }>(sources: T[]): { live: T[]; muted: T[] } {
   const live: T[] = [];
   const muted: T[] = [];
   for (const s of sources) (isMuted(s.id) ? muted : live).push(s);
-  const bySpeed = (a: T, b: T) =>
-    (stats.get(a.id)?.avgMs ?? UNKNOWN_MS) - (stats.get(b.id)?.avgMs ?? UNKNOWN_MS);
-  live.sort(bySpeed);
-  muted.sort(bySpeed);
+  const byValue = (a: T, b: T) => {
+    const rate = hitRate(stats.get(b.id)) - hitRate(stats.get(a.id));
+    if (Math.abs(rate) > 0.01) return rate;
+    return (stats.get(a.id)?.avgMs ?? UNKNOWN_MS) - (stats.get(b.id)?.avgMs ?? UNKNOWN_MS);
+  };
+  live.sort(byValue);
+  muted.sort(byValue);
   return { live, muted };
 }
 
