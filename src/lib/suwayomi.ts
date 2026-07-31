@@ -155,11 +155,15 @@ export async function installExtension(pkgName: string, timeoutMs = 120_000): Pr
   );
 }
 
+// timeoutMs must mirror the callers own budget: abandoning the promise while
+// the request stays open leaves the engine working for an answer nobody reads,
+// and that leak is what saturated its GraphQL workers.
 export async function browseSource(
   source: string,
   type: BrowseType,
   page: number,
   query?: string,
+  timeoutMs = GQL_TIMEOUT_MS,
 ): Promise<{ hasNextPage: boolean; mangas: SuwayomiManga[] }> {
   const data = await gql<{
     fetchSourceManga: { hasNextPage: boolean; mangas: SuwayomiManga[] };
@@ -171,6 +175,7 @@ export async function browseSource(
       }
     }`,
     { input: { source, type, page, ...(query ? { query } : {}) } },
+    timeoutMs,
   );
   return data.fetchSourceManga;
 }

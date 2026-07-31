@@ -18,6 +18,10 @@ services:
       SOLVER_PROXY_TOKEN: ${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}
       # Uploaded avatars/banners live on the mounted data volume.
       UPLOAD_DIR: /data/uploads
+      # Process-wide ceiling on source searches in flight against the engine.
+      # Above this the engine's GraphQL workers all park on challenge solves and
+      # every other query starves, including the health probe.
+      SUWAYOMI_SEARCH_CONCURRENCY: ${SUWAYOMI_SEARCH_CONCURRENCY:-8}
       # Chapter pages are immutable, so they are served from disk after the
       # first fetch. Sized for the local server, not a VPS.
       IMAGE_CACHE_DIR: /data/imgcache
@@ -95,7 +99,9 @@ services:
       # so the engine gets the facade's fallback behavior.
       FLARESOLVERR_ENABLED: "${FLARESOLVERR_ENABLED:-true}"
       FLARESOLVERR_URL: "http://web:3000/api/solver/${SOLVER_PROXY_TOKEN:?set SOLVER_PROXY_TOKEN in .env}"
-      FLARESOLVERR_TIMEOUT: "60"
+      # A search the app already gave up on must not keep a GraphQL worker busy;
+      # this is the engine-side cap that matches the app's own per-source budget.
+      FLARESOLVERR_TIMEOUT: "${FLARESOLVERR_TIMEOUT:-20}"
       FLARESOLVERR_SESSION_NAME: "suwayomi"
       FLARESOLVERR_SESSION_TTL: "15"
       FLARESOLVERR_RESPONSE_AS_FALLBACK: "${FLARESOLVERR_RESPONSE_AS_FALLBACK:-true}"

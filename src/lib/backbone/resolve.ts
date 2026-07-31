@@ -14,6 +14,7 @@ import {
 import { isBlocked } from "@/lib/backbone/filter";
 import { scoreSourceLink } from "@/lib/backbone/health";
 import { isMuted, partitionByHealth, recordFail, recordOk } from "@/lib/backbone/sourceStats";
+import { acquireEngineSlot } from "@/lib/backbone/engineGate";
 import {
   searchMangaDex,
   getMangaDexManga,
@@ -46,9 +47,10 @@ const SWEEP_DEADLINE_MS = 20_000;
 // The pass that runs after the page is served has no reader waiting on it, so
 // it can afford to reach every remaining source.
 const BACKGROUND_SWEEP_MS = 180_000;
-// Suwayomi answers searches concurrently; the old serial-ish pass left the
-// engine idle while the request waited on timeouts.
-const SEARCH_CONCURRENCY = 32;
+// Per-work fan-out. The real ceiling is the process-wide engine gate, so this
+// only needs to keep the gate fed; a wider pool would just claim sources it
+// then drops at the deadline without ever searching them.
+const SEARCH_CONCURRENCY = 12;
 // Floor for accepting a canonicalization onto another backbone entry. Source
 // matching uses the length-aware rule in normalize instead.
 const MATCH_THRESHOLD = 0.8;
@@ -329,8 +331,9 @@ async function searchAndMatch(
   workId: number,
   query: string,
   titles: string[],
+  budgetMs: number,
 ): Promise<boolean> {
-  const { mangas } = await browseSource(source.id, "SEARCH", 1, query);
+  const { mangas } = await browseSource(source.id, "SEARCH", 1, query, budgetMs);
   const match = bestCandidate(mangas ?? [], titles);
   if (!match) return false;
   await syncMatch(source, workId, match);
@@ -349,12 +352,22 @@ async function processSource(
   // query alone misses them. Each query gets its own budget instead of sharing
   // one, and latency/failures feed the health memory.
   for (const query of queries) {
+    // Time spent queueing for an engine slot is our own backlog, so the budget
+    // and the health verdict both start once the slot is ours.
+    const slot = await acquireEngineSlot(deadline);
+    if (!slot) return;
     const started = Date.now();
     const budget = Math.min(SOURCE_TIMEOUT, deadline - started);
     // Too little left to judge the source fairly; leave it for the next pass.
-    if (budget < 1_500) return;
+    if (budget < 1_500) {
+      slot.release();
+      return;
+    }
     try {
-      const hit = await withTimeout(searchAndMatch(source, workId, query, titles), budget);
+      const hit = await withTimeout(
+        searchAndMatch(source, workId, query, titles, budget),
+        budget,
+      );
       recordOk(source.id, Date.now() - started);
       if (hit) return;
     } catch (e) {
@@ -363,6 +376,8 @@ async function processSource(
       const timedOut = e instanceof Error && e.message === "timeout";
       if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
       return;
+    } finally {
+      slot.release();
     }
   }
 }
