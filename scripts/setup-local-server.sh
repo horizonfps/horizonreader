@@ -72,6 +72,12 @@ else
   echo "sem reader-data.tgz: subindo com banco vazio"
 fi
 
+# The image runs as uid 1000, but Docker creates missing bind mounts as root,
+# which leaves the server crash-looping on a config it cannot write.
+say "Volumes do Suwayomi"
+mkdir -p "$APP_DIR/suwayomi/data" "$APP_DIR/suwayomi/downloads"
+chown -R 1000:1000 "$APP_DIR/suwayomi"
+
 say "Subindo a stack"
 cd "$APP_DIR"
 docker compose up -d --build --remove-orphans
