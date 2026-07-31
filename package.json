@@ -14,6 +14,7 @@
     "fix-sources": "node --env-file-if-exists=.env --experimental-strip-types scripts/fix-sources.ts",
     "dedupe-sources": "node --env-file-if-exists=.env --experimental-strip-types scripts/dedupe-sources.ts",
     "sync-extensions": "node --env-file-if-exists=.env --experimental-strip-types scripts/sync-extensions.ts",
+    "repair-source-links": "node --env-file-if-exists=.env --experimental-strip-types scripts/repair-source-links.ts",
     "match-test": "node --experimental-strip-types scripts/match-test.ts",
     "postinstall": "prisma generate"
   },
