@@ -239,11 +239,16 @@ export async function getMangaEnsured(id: number): Promise<SuwayomiManga | null>
 export async function getMangaSourceIds(ids: number[]): Promise<Map<number, string | null>> {
   const out = new Map<number, string | null>();
   if (!ids.length) return out;
-  const fields = ids.map((id) => `m${id}: manga(id: ${id}) { id source { id } }`).join(" ");
-  const data = await gql<Record<string, { id: number; source?: { id: string } | null } | null>>(
-    `query { ${fields} }`,
+  // Filtering leaves unknown ids out of the result; querying manga(id:) per id
+  // would fail the whole batch on the first one that no longer exists.
+  const data = await gql<{ mangas: { nodes: { id: number; source?: { id: string } | null }[] } }>(
+    `query Owners($ids: [Int!]) {
+      mangas(filter: { id: { in: $ids } }) { nodes { id source { id } } }
+    }`,
+    { ids },
   );
-  for (const id of ids) out.set(id, data[`m${id}`]?.source?.id ?? null);
+  for (const id of ids) out.set(id, null);
+  for (const node of data.mangas.nodes) out.set(node.id, node.source?.id ?? null);
   return out;
 }
 
