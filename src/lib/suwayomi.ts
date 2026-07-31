@@ -153,6 +153,20 @@ export async function installExtension(pkgName: string, timeoutMs = 120_000): Pr
     { id: pkgName },
     timeoutMs,
   );
+  invalidateSourcesCache();
+}
+
+export async function uninstallExtension(pkgName: string, timeoutMs = 120_000): Promise<void> {
+  await gql(
+    `mutation Uninstall($id: String!) {
+      updateExtension(input: { id: $id, patch: { uninstall: true } }) {
+        extension { pkgName isInstalled }
+      }
+    }`,
+    { id: pkgName },
+    timeoutMs,
+  );
+  invalidateSourcesCache();
 }
 
 // timeoutMs must mirror the callers own budget: abandoning the promise while
