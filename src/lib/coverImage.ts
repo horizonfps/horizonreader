@@ -1,7 +1,11 @@
 // Shrinks a cover to card size and re-encodes it as WebP, so every cache tier
 // holds one small, uniform format regardless of what the source served.
 
-type SharpModule = { default: typeof import("sharp") };
+// sharp ships CJS types up to 0.34 and ESM types from 0.35, so unwrap the
+// default export only when the module namespace actually carries one.
+type SharpNamespace = typeof import("sharp");
+type SharpFactory = SharpNamespace extends { default: infer D } ? D : SharpNamespace;
+type SharpModule = { default: SharpFactory };
 let sharpModule: Promise<SharpModule> | null = null;
 
 // Lazy module load so a broken sharp install never fails the route on import.
