@@ -6,6 +6,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { prisma } from "@/lib/db";
 import { solverMemorySnapshot } from "@/lib/scrapers/solverMemory";
+import { engineGateSnapshot } from "@/lib/backbone/engineGate";
 import { listExtensions, listSources } from "@/lib/suwayomi";
 import { findHostProcess } from "./host";
 
@@ -58,30 +59,62 @@ async function getJson(url: string, timeoutMs = 6_000): Promise<unknown> {
 
 // ---- engine ----
 
-async function suwayomiProbe(): Promise<Probe & { extensions: ExtensionStats | null; sources: number | null }> {
+// Liveness comes from REST and saturation from GraphQL, because they fail
+// independently: a search backlog parks every GraphQL worker while the process
+// still answers REST in milliseconds, and reading liveness off GraphQL reported
+// that as a dead engine.
+async function suwayomiProbe(): Promise<
+  Probe & { extensions: ExtensionStats | null; sources: number | null; graphql: GraphqlHealth }
+> {
   const result = await timed(async () => {
-    const res = await fetch(`${SUWAYOMI_URL}/api/graphql`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: "{ aboutServer { name version revision buildType } }" }),
+    const res = await fetch(`${SUWAYOMI_URL}/api/v1/settings/about`, {
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = (await res.json()) as { data?: { aboutServer?: Record<string, string> } };
-    const about = json.data?.aboutServer;
-    return about ? `${about.name} ${about.version} (${about.revision})` : "online";
+    const about = (await res.json().catch(() => ({}))) as Record<string, string>;
+    return about.version ? `${about.name} ${about.version} (${about.revision})` : "online";
   });
 
-  const catalogue = result.ok ? await cached("catalogue", 120_000, loadCatalogue) : null;
+  const graphql = result.ok ? await graphqlHealth() : { ok: false, latencyMs: null, error: null };
+  const catalogue = graphql.ok ? await cached("catalogue", 120_000, loadCatalogue) : null;
 
   return {
     name: "Suwayomi",
     url: SUWAYOMI_URL,
     ...result,
+    detail: graphql.ok
+      ? result.detail
+      : [result.detail, "GraphQL saturado"].filter(Boolean).join(" · "),
     extensions: catalogue?.extensions ?? null,
     sources: catalogue?.sources ?? null,
+    graphql: { ...graphql, gate: engineGateSnapshot() },
   };
+}
+
+type GraphqlProbe = { ok: boolean; latencyMs: number | null; error: string | null };
+type GraphqlHealth = GraphqlProbe & { gate: ReturnType<typeof engineGateSnapshot> };
+
+async function graphqlHealth(): Promise<GraphqlProbe> {
+  const started = Date.now();
+  try {
+    const res = await fetch(`${SUWAYOMI_URL}/api/graphql`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "{ aboutServer { version } }" }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await res.json().catch(() => ({}));
+    return { ok: true, latencyMs: Date.now() - started, error: null };
+  } catch (err) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - started,
+      error: (err as Error).message.slice(0, 200),
+    };
+  }
 }
 
 type ExtensionStats = {

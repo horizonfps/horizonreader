@@ -112,6 +112,20 @@ export default function ServicesPanel({ services }: { services: ServicesSnapshot
       </Card>
 
       <Card title="Engine (Suwayomi)">
+        <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <Stat
+            label="GraphQL"
+            value={suwayomi.graphql.ok ? `${suwayomi.graphql.latencyMs} ms` : "saturado"}
+            tone={suwayomi.graphql.ok ? "ok" : "warn"}
+            sub={suwayomi.graphql.error ?? "fila de buscas"}
+          />
+          <Stat
+            label="Buscas em voo"
+            value={`${suwayomi.graphql.gate.active}/${suwayomi.graphql.gate.limit}`}
+            tone={suwayomi.graphql.gate.active >= suwayomi.graphql.gate.limit ? "warn" : "ok"}
+          />
+          <Stat label="Na fila" value={count(suwayomi.graphql.gate.waiting)} />
+        </div>
         {suwayomi.extensions ? (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
