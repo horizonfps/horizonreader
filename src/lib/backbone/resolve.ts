@@ -269,11 +269,26 @@ type Coverage = { hits: number };
 
 const ENOUGH_LINKS = 3;
 
+// Why a sweep found nothing is invisible when every source failure is swallowed
+// per source; tallying the reasons is what separates "no source has this work"
+// from "every search errored the same way".
+type Diag = Map<string, number>;
+
+function tally(diag: Diag | undefined, reason: string): void {
+  if (diag) diag.set(reason, (diag.get(reason) ?? 0) + 1);
+}
+
+function reasonOf(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  return m.slice(0, 60);
+}
+
 async function syncMatch(
   source: SuwayomiSource,
   workId: number,
   result: SuwayomiManga,
   coverage?: Coverage,
+  diag?: Diag,
 ) {
   try {
     await refreshManga(result.id).catch(() => {});
@@ -285,6 +300,7 @@ async function syncMatch(
     // A match without readable chapters is a dead source; keep it out so it
     // neither shows in the UI nor marks the work as freshly synced.
     if (chapterCount === 0) {
+      tally(diag, "matched but no chapters");
       await prisma.sourceLink
         .deleteMany({ where: { sourceId: source.id, sourceMangaId: result.id } })
         .catch(() => {});
@@ -360,6 +376,7 @@ async function processSource(
   titles: string[],
   deadline: number,
   coverage?: Coverage,
+  diag?: Diag,
 ) {
   // Try each query in order (English first, then localized alt titles) until a
   // match lands. pt-BR scan sites index by the Portuguese title, so an English
@@ -369,12 +386,18 @@ async function processSource(
     // Time spent queueing for an engine slot is our own backlog, so the budget
     // and the health verdict both start once the slot is ours.
     const slot = await acquireEngineSlot(deadline);
-    if (!slot) return;
+    if (!slot) {
+      tally(diag, "no engine slot");
+      return;
+    }
     try {
       const started = Date.now();
       const budget = Math.min(SOURCE_TIMEOUT, deadline - started);
       // Too little left to judge the source fairly; leave it for the next pass.
-      if (budget < 1_500) return;
+      if (budget < 1_500) {
+        tally(diag, "out of budget");
+        return;
+      }
       recordTry(source.id);
 
       let match: SuwayomiManga | null;
@@ -385,11 +408,13 @@ async function processSource(
         );
         recordOk(source.id, Date.now() - started);
         match = bestCandidate(mangas ?? [], titles);
+        if (!match) tally(diag, mangas?.length ? "no title match" : "empty search");
       } catch (e) {
         // A source cut short by the sweep deadline is not unhealthy; one that
         // burned its own budget or errored outright is.
         const timedOut = e instanceof Error && e.message === "timeout";
         if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
+        tally(diag, reasonOf(e));
         return;
       }
       if (!match) continue;
@@ -398,8 +423,8 @@ async function processSource(
       // usable link, and it costs far more than the search that found it.
       // Sharing the search budget here threw away matches the source had
       // already handed us.
-      await withTimeout(syncMatch(source, workId, match, coverage), SYNC_TIMEOUT).catch(
-        () => {},
+      await withTimeout(syncMatch(source, workId, match, coverage, diag), SYNC_TIMEOUT).catch(
+        (e) => tally(diag, `sync: ${reasonOf(e)}`),
       );
       return;
     } finally {
@@ -615,12 +640,13 @@ async function doResolveSourcesForWork(
   // seconds. Once they do, asking the remaining hundreds buys the reader
   // nothing, and every one of those asks can cost a browser-based solve.
   const coverage: Coverage = { hits: 0 };
+  const diag: Diag = new Map();
   const [pending] = await Promise.all([
     runPool(
       live,
       SEARCH_CONCURRENCY,
       deadline,
-      (s) => processSource(s, workId, queries, titles, deadline, coverage),
+      (s) => processSource(s, workId, queries, titles, deadline, coverage, diag),
       () => coverage.hits >= ENOUGH_LINKS,
     ),
     // Plain-API sources answer in a second and are the most reliable link a
@@ -631,7 +657,8 @@ async function doResolveSourcesForWork(
   await pruneDuplicateLinks(workId);
   await promotePrimary(workId);
   console.info(
-    `[resolve] work ${workId}: ${coverage.hits} links from ${live.length - pending.length}/${live.length} sources, ${pending.length + muted.length} deferred`,
+    `[resolve] work ${workId}: ${coverage.hits} links from ${live.length - pending.length}/${live.length} sources, ${pending.length + muted.length} deferred | ` +
+      [...diag.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([r, n]) => `${r} x${n}`).join(", "),
   );
 
   // Whatever the render budget could not reach still gets searched, just never
