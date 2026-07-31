@@ -550,8 +550,10 @@ async function doResolveSourcesForWork(
   }
   // Only English and Brazilian-Portuguese scan sources are relevant. Searching all
   // ~250 (every language) overloads Suwayomi and causes timeout-induced misses.
-  const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)));
-  const targets = wanted.length ? wanted : sources;
+  // Adult-flagged sources are dropped too: the content policy blocks their works
+  // from ever rendering, so searching them only burns solver time.
+  const wanted = sources.filter((s) => PREFERRED_LANGS.has(normLang(s.lang)) && !s.isNsfw);
+  const targets = wanted.length ? wanted : sources.filter((s) => !s.isNsfw);
 
   // Solver-backed scrapers cost tens of seconds, so they run detached: the page
   // never waits on them and their links show up on the next poll. Muted sources

@@ -15,6 +15,7 @@ export type SuwayomiSource = {
   iconUrl: string;
   supportsLatest: boolean;
   isConfigurable: boolean;
+  isNsfw: boolean;
 };
 
 export type SuwayomiManga = {
@@ -82,12 +83,37 @@ export function pageUrl(mangaId: number, sourceOrder: number, pageIndex: number)
 }
 
 // ---- sources / browse ----
+
+// The catalogue only changes when an extension is installed, but every source
+// sweep used to re-read all ~1300 rows, which competed with the sweep itself
+// for engine workers.
+const SOURCES_TTL_MS = 300_000;
+let sourcesCache: { at: number; value: SuwayomiSource[] } | null = null;
+let sourcesInFlight: Promise<SuwayomiSource[]> | null = null;
+
+export function invalidateSourcesCache(): void {
+  sourcesCache = null;
+}
+
 export async function listSources(): Promise<SuwayomiSource[]> {
-  const data = await gql<{ sources: { nodes: SuwayomiSource[] } }>(`
+  if (sourcesCache && Date.now() - sourcesCache.at < SOURCES_TTL_MS) return sourcesCache.value;
+  if (sourcesInFlight) return sourcesInFlight;
+  sourcesInFlight = gql<{ sources: { nodes: SuwayomiSource[] } }>(`
     query {
-      sources { nodes { id name displayName lang iconUrl isConfigurable supportsLatest } }
-    }`);
-  return data.sources.nodes;
+      sources { nodes { id name displayName lang iconUrl isConfigurable supportsLatest isNsfw } }
+    }`)
+    .then((data) => {
+      sourcesCache = { at: Date.now(), value: data.sources.nodes };
+      return data.sources.nodes;
+    })
+    .finally(() => {
+      sourcesInFlight = null;
+    });
+  // A failed refresh must not drop a catalogue we already have.
+  return sourcesInFlight.catch((e) => {
+    if (sourcesCache) return sourcesCache.value;
+    throw e;
+  });
 }
 
 export type SuwayomiExtension = {
