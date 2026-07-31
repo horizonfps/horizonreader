@@ -1,11 +1,25 @@
 # Deploy — reader.horizonfps.space
 
-App no PC de casa via Docker, publicado por uma Cloudflare Tunnel. Só o app web
+App num servidor Ubuntu de casa (`g15-server`, projeto em
+`/srv/docker/horizonreader`), publicado por uma Cloudflare Tunnel. Só o app web
 fica exposto; Suwayomi e o motor de desafio (trawl) ficam internos.
+
+## Instalação limpa
+
+`scripts/setup-local-server.sh` faz a máquina nova inteira: Docker pelo
+repositório oficial, clone, `.env`, importação do banco, subida da stack e as
+fontes do Suwayomi. Basta deixar `.env` e, se for migrar dados, um
+`reader-data.tgz` com `app.db` e `uploads` ao lado do script:
+
+```
+sudo bash setup-local-server.sh
+```
+
+Ele também impede o notebook de suspender ao fechar a tampa, que é o que derruba
+o site num servidor doméstico.
 
 ## Pré-requisitos
 
-- Docker Desktop rodando (com "start on login" pra subir sozinho).
 - **`horizonfps.space` no DNS da Cloudflare.** A Cloudflare Tunnel só roteia
   hostnames cujo domínio seja uma zona Cloudflare. Se o domínio estiver noutro
   DNS (Vercel etc.), mova primeiro: painel da Cloudflare > Add a site > plano
@@ -19,7 +33,7 @@ porta livre e coloque no `.env`:
 
 ```
 AUTH_SECRET=<string longa aleatória>
-WEB_PORT=41573
+WEB_PORT=8081
 ```
 
 Suba só o app (reaproveita Suwayomi/trawl se já estiverem de pé):
@@ -55,21 +69,23 @@ custava 77 das 113 fontes pt-BR.
 
 ## 2. Cloudflare Tunnel → app
 
-Duas formas de rodar o conector (escolha uma):
-
-- **Serviço do Windows** (o que está em uso): `cloudflared.exe service install <token>`.
-  O conector roda no host, então a rota deve apontar pra `localhost:<WEB_PORT>`.
-- **Container** (portável, ex. num VPS): `docker compose --profile tunnel up -d`
-  com `CF_TUNNEL_TOKEN` no `.env`. Aí a rota aponta pra `web:3000`.
+O conector roda como container junto da stack: `CF_TUNNEL_TOKEN` no `.env` e
+`docker compose --profile tunnel up -d`. Como ele sobe por token, a configuração
+é a remota (painel/API), não um `config.yml` local.
 
 No painel Zero Trust > Networks > Tunnels > (seu túnel) > Public Hostname > Add:
 
 - Subdomain: `reader`
 - Domain: `horizonfps.space`
 - Path: vazio
-- Service: Type `HTTP`, URL `localhost:41573` (serviço Windows) ou `web:3000` (container)
+- Service: Type `HTTP`, URL `web:3000` — nome do serviço na rede do compose, não
+  `localhost`, que dentro do container é o próprio conector.
 
 Salvar. A Cloudflare cria o CNAME `reader.horizonfps.space` sozinha.
+
+Um conector antigo rodando noutra máquina continua atendendo o mesmo túnel e
+divide o tráfego com este. Ao mudar de máquina, remova o de lá
+(`cloudflared service uninstall`).
 
 ## 3. Criar seu usuário (não há cadastro público)
 
