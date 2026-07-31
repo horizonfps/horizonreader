@@ -1,6 +1,21 @@
-// Live health memory for scan sources. A Suwayomi extension that keeps timing
-// out is muted for a growing cooldown, and healthy sources are searched first,
-// so a first open is never held hostage by dead extensions.
+// Health memory for scan sources. A Suwayomi extension that keeps timing out is
+// muted for a growing cooldown, and healthy sources are searched first, so a
+// first open is never held hostage by dead extensions.
+//
+// Persisted to the /data volume, like solverMemory. The sweep only reaches a
+// few dozen of the ~630 sources inside a page budget, so which ones go first
+// decides whether a work resolves at all. Keeping this in memory alone meant
+// every deploy went back to asking sources in arbitrary order and re-learning
+// from zero.
+
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+const STATE_DIR = process.env.SOLVER_STATE_DIR || (existsSync("/data") ? "/data" : ".cache");
+const STATE_FILE = join(STATE_DIR, "source-memory.json");
+const WRITE_EVERY_MS = 15_000;
+const MAX_SOURCES = 2_000;
 
 type Stat = {
   ok: number;
@@ -19,7 +34,56 @@ const MUTE_MAX_MS = 6 * 3_600_000;
 // early, high enough that proven-fast sources still go first.
 const UNKNOWN_MS = 1_500;
 
-const stats = new Map<string, Stat>();
+function load(): Map<string, Stat> {
+  try {
+    const raw = JSON.parse(readFileSync(STATE_FILE, "utf8")) as {
+      v?: number;
+      sources?: Record<string, Stat>;
+    };
+    if (raw.v !== 1 || !raw.sources) return new Map();
+    // Mutes are deliberately not persisted: a restart is a fair moment to give
+    // a source another chance.
+    return new Map(
+      Object.entries(raw.sources).map(([id, s]) => [id, { ...s, streak: 0, mutedUntil: 0 }]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+const stats = load();
+
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleWrite(): void {
+  if (writeTimer) return;
+  writeTimer = setTimeout(() => {
+    writeTimer = null;
+    void persist();
+  }, WRITE_EVERY_MS);
+  writeTimer.unref?.();
+}
+
+async function persist(): Promise<void> {
+  try {
+    if (stats.size > MAX_SOURCES) {
+      const leastUsed = [...stats.entries()].sort(
+        (a, b) => a[1].ok + a[1].fail - (b[1].ok + b[1].fail),
+      );
+      for (const [k] of leastUsed) {
+        if (stats.size <= MAX_SOURCES) break;
+        stats.delete(k);
+      }
+    }
+    await mkdir(STATE_DIR, { recursive: true });
+    const body = JSON.stringify({ v: 1, sources: Object.fromEntries(stats) });
+    const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+    await writeFile(tmp, body);
+    await rename(tmp, STATE_FILE);
+  } catch {
+    /* memory is best-effort */
+  }
+}
 
 function statFor(id: string): Stat {
   let s = stats.get(id);
@@ -35,10 +99,12 @@ function statFor(id: string): Stat {
 // sweep that stops at the first few links, so hit rate has to outrank latency.
 export function recordHit(id: string): void {
   statFor(id).hits += 1;
+  scheduleWrite();
 }
 
 export function recordTry(id: string): void {
   statFor(id).tries += 1;
+  scheduleWrite();
 }
 
 // Laplace-smoothed, so a source never tried yet sits mid-pack instead of
@@ -59,6 +125,7 @@ export function recordOk(id: string, ms: number): void {
   s.streak = 0;
   s.mutedUntil = 0;
   s.avgMs = s.ok === 1 ? ms : s.avgMs * 0.7 + ms * 0.3;
+  scheduleWrite();
 }
 
 export function recordFail(id: string): void {
@@ -69,6 +136,7 @@ export function recordFail(id: string): void {
     const backoff = MUTE_BASE_MS * 2 ** (s.streak - MUTE_AFTER);
     s.mutedUntil = Date.now() + Math.min(backoff, MUTE_MAX_MS);
   }
+  scheduleWrite();
 }
 
 // Splits into the sources worth blocking a request on and the muted ones, each
