@@ -17,6 +17,7 @@ const inFlight = new Map<string, Promise<void>>();
 export type ChapterLink = {
   id: number;
   kind?: string | null;
+  sourceId?: string | null;
   sourceMangaId: number;
   chapterCount?: number;
 };
@@ -25,14 +26,39 @@ export function chapterCacheKey(link: ChapterLink): string {
   return link.kind === "scraper" ? `n:${link.id}` : `s:${link.sourceMangaId}`;
 }
 
+// Engine manga ids are local to its own database, so a rebuilt or migrated
+// engine reassigns them and a stored id can now name an unrelated title. Left
+// unchecked the page renders another work's chapters, which is worse than the
+// empty list. A link that fails the check is dropped so the sweep rebuilds it.
+async function dropStaleLink(link: ChapterLink): Promise<void> {
+  cache.delete(chapterCacheKey(link));
+  try {
+    await prisma.chapterListCache.deleteMany({ where: { sourceLinkId: link.id } });
+    await prisma.sourceLink.delete({ where: { id: link.id } });
+  } catch {
+    // best-effort: the link is unusable either way
+  }
+}
+
 // The real fetch from source, split out so background revalidation loops
 // (other tickets in this round) can call it without going through a page.
 export async function loadChaptersForLink(link: ChapterLink): Promise<RawChapter[]> {
   if (link.kind === "scraper") {
     return getNativeChapters(link.id).catch(() => []);
   }
-  // A link that already carries chapters was initialized by the sync.
-  if (!link.chapterCount) await getMangaEnsured(link.sourceMangaId).catch(() => null);
+  let manga;
+  try {
+    manga = await getMangaEnsured(link.sourceMangaId);
+  } catch {
+    // Engine unreachable is not evidence the link is wrong; keep it.
+    return [];
+  }
+  const belongsElsewhere =
+    !!link.sourceId && !!manga?.source?.id && manga.source.id !== link.sourceId;
+  if (!manga || belongsElsewhere) {
+    await dropStaleLink(link);
+    return [];
+  }
   return getChapters(link.sourceMangaId).catch(() => []);
 }
 

@@ -232,6 +232,21 @@ export async function getMangaEnsured(id: number): Promise<SuwayomiManga | null>
   return manga;
 }
 
+// Which source each manga id actually belongs to right now. Engine manga ids
+// are local to its own database, so a rebuilt or migrated engine hands the same
+// id to an unrelated title; this is how a stored id gets checked in bulk.
+// Missing ids come back as null.
+export async function getMangaSourceIds(ids: number[]): Promise<Map<number, string | null>> {
+  const out = new Map<number, string | null>();
+  if (!ids.length) return out;
+  const fields = ids.map((id) => `m${id}: manga(id: ${id}) { id source { id } }`).join(" ");
+  const data = await gql<Record<string, { id: number; source?: { id: string } | null } | null>>(
+    `query { ${fields} }`,
+  );
+  for (const id of ids) out.set(id, data[`m${id}`]?.source?.id ?? null);
+  return out;
+}
+
 export async function getChapters(mangaId: number): Promise<SuwayomiChapter[]> {
   const data = await gql<{ chapters: { nodes: SuwayomiChapter[] } }>(
     `query GetChapters($condition: ChapterConditionInput, $order: [ChapterOrderInput!]) {
