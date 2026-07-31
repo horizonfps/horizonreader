@@ -136,22 +136,28 @@ function sleep(ms: number): Promise<void> {
 // or once `stop` says the caller has what it needs. Returns what it never got
 // to, so the caller can finish the sweep off the request path instead of
 // silently dropping those sources.
+// `fn` reports whether it actually judged the item. One that gave up without
+// searching (no budget left, no engine slot) has to come back as pending:
+// counting it as done consumed it from the queue and dropped it from the
+// deferred pass too, so those sources were never searched at all, then or later.
 async function runPool<T>(
   items: T[],
   limit: number,
   deadline: number,
-  fn: (item: T) => Promise<void>,
+  fn: (item: T) => Promise<boolean>,
   stop?: () => boolean,
 ): Promise<T[]> {
   let next = 0;
+  const skipped: T[] = [];
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length && Date.now() < deadline && !stop?.()) {
       const item = items[next++];
-      await fn(item).catch(() => {});
+      const judged = await fn(item).catch(() => true);
+      if (!judged) skipped.push(item);
     }
   });
   await Promise.all(workers);
-  return items.slice(next);
+  return [...skipped, ...items.slice(next)];
 }
 
 function descriptiveData(bw: BackboneWork) {
@@ -377,7 +383,7 @@ async function processSource(
   deadline: number,
   coverage?: Coverage,
   diag?: Diag,
-) {
+): Promise<boolean> {
   // Try each query in order (English first, then localized alt titles) until a
   // match lands. pt-BR scan sites index by the Portuguese title, so an English
   // query alone misses them. Each query gets its own budget instead of sharing
@@ -388,7 +394,7 @@ async function processSource(
     const slot = await acquireEngineSlot(deadline);
     if (!slot) {
       tally(diag, "no engine slot");
-      return;
+      return false;
     }
     try {
       const started = Date.now();
@@ -396,7 +402,7 @@ async function processSource(
       // Too little left to judge the source fairly; leave it for the next pass.
       if (budget < 1_500) {
         tally(diag, "out of budget");
-        return;
+        return false;
       }
       recordTry(source.id);
 
@@ -415,7 +421,7 @@ async function processSource(
         const timedOut = e instanceof Error && e.message === "timeout";
         if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
         tally(diag, reasonOf(e));
-        return;
+        return true;
       }
       if (!match) continue;
 
@@ -426,11 +432,12 @@ async function processSource(
       await withTimeout(syncMatch(source, workId, match, coverage, diag), SYNC_TIMEOUT).catch(
         (e) => tally(diag, `sync: ${reasonOf(e)}`),
       );
-      return;
+      return true;
     } finally {
       slot.release();
     }
   }
+  return true;
 }
 
 async function processScraper(
