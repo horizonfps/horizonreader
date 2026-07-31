@@ -46,6 +46,9 @@ const DAY_MS = 86_400_000;
 const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
 const SOURCE_TIMEOUT = 6_000;
+// Budget for the post-match sync, which refreshes the manga and pulls its
+// chapter list. Sized against the search budget, not equal to it.
+const SYNC_TIMEOUT = 25_000;
 const SCRAPER_TIMEOUT = 45_000;
 const FAST_SCRAPER_TIMEOUT = 12_000;
 // Hard ceiling on the whole Suwayomi sweep. Without it the pass lasts as long
@@ -348,21 +351,6 @@ function bestScraperCandidate(
   return pickBest(results, titles);
 }
 
-async function searchAndMatch(
-  source: SuwayomiSource,
-  workId: number,
-  query: string,
-  titles: string[],
-  budgetMs: number,
-  coverage?: Coverage,
-): Promise<boolean> {
-  const { mangas } = await browseSource(source.id, "SEARCH", 1, query, budgetMs);
-  const match = bestCandidate(mangas ?? [], titles);
-  if (!match) return false;
-  await syncMatch(source, workId, match, coverage);
-  return true;
-}
-
 async function processSource(
   source: SuwayomiSource,
   workId: number,
@@ -380,26 +368,37 @@ async function processSource(
     // and the health verdict both start once the slot is ours.
     const slot = await acquireEngineSlot(deadline);
     if (!slot) return;
-    const started = Date.now();
-    const budget = Math.min(SOURCE_TIMEOUT, deadline - started);
-    // Too little left to judge the source fairly; leave it for the next pass.
-    if (budget < 1_500) {
-      slot.release();
-      return;
-    }
-    recordTry(source.id);
     try {
-      const hit = await withTimeout(
-        searchAndMatch(source, workId, query, titles, budget, coverage),
-        budget,
+      const started = Date.now();
+      const budget = Math.min(SOURCE_TIMEOUT, deadline - started);
+      // Too little left to judge the source fairly; leave it for the next pass.
+      if (budget < 1_500) return;
+      recordTry(source.id);
+
+      let match: SuwayomiManga | null;
+      try {
+        const { mangas } = await withTimeout(
+          browseSource(source.id, "SEARCH", 1, query, budget),
+          budget,
+        );
+        recordOk(source.id, Date.now() - started);
+        match = bestCandidate(mangas ?? [], titles);
+      } catch (e) {
+        // A source cut short by the sweep deadline is not unhealthy; one that
+        // burned its own budget or errored outright is.
+        const timedOut = e instanceof Error && e.message === "timeout";
+        if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
+        return;
+      }
+      if (!match) continue;
+
+      // Pulling the manga and its chapter list is what turns a match into a
+      // usable link, and it costs far more than the search that found it.
+      // Sharing the search budget here threw away matches the source had
+      // already handed us.
+      await withTimeout(syncMatch(source, workId, match, coverage), SYNC_TIMEOUT).catch(
+        () => {},
       );
-      recordOk(source.id, Date.now() - started);
-      if (hit) return;
-    } catch (e) {
-      // A source cut short by the sweep deadline is not unhealthy; one that
-      // burned its own budget or errored outright is.
-      const timedOut = e instanceof Error && e.message === "timeout";
-      if (!timedOut || Date.now() - started >= SOURCE_TIMEOUT - 50) recordFail(source.id);
       return;
     } finally {
       slot.release();
