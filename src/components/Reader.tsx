@@ -59,12 +59,22 @@ function PageImage({
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const loadedRef = useRef(false);
+
+  const markLoaded = useCallback(() => {
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+    setLoaded(true);
+    onFirstLoad?.();
+  }, [onFirstLoad]);
 
   useEffect(() => {
+    if (imageRef.current?.complete && imageRef.current.naturalWidth > 0) markLoaded();
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, []);
+  }, [attempt, markLoaded]);
 
   const onError = () => {
     if (attempt >= MAX_RETRIES) {
@@ -84,15 +94,13 @@ function PageImage({
     <div className={`relative ${wrapperClassName ?? ""} ${!loaded ? loadingClassName ?? "" : ""}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
+        ref={imageRef}
         key={attempt}
         src={retryUrl(url, attempt)}
         alt=""
         loading={eager ? "eager" : "lazy"}
         decoding="async"
-        onLoad={() => {
-          setLoaded(true);
-          onFirstLoad?.();
-        }}
+        onLoad={markLoaded}
         onError={onError}
         className={className}
       />
