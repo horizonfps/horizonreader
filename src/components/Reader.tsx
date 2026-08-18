@@ -46,12 +46,14 @@ function PageImage({
   onFirstLoad,
   className,
   wrapperClassName,
+  loadingClassName,
 }: {
   url: string;
   eager: boolean;
   onFirstLoad?: () => void;
   className: string;
   wrapperClassName?: string;
+  loadingClassName?: string;
 }) {
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState(false);
@@ -79,7 +81,7 @@ function PageImage({
   };
 
   return (
-    <div className={`relative ${wrapperClassName ?? ""}`}>
+    <div className={`relative ${wrapperClassName ?? ""} ${!loaded ? loadingClassName ?? "" : ""}`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         key={attempt}
@@ -381,14 +383,13 @@ export default function Reader({
                 ref={(el) => {
                   wrapRefs.current[i] = el;
                 }}
-                style={{ minHeight: "60vh" }}
               >
                 <PageImage
                   url={url}
                   eager={i <= Math.max(initialPage, 0) + 2}
                   onFirstLoad={i === initialPage ? settleResume : undefined}
-                  wrapperClassName="min-h-[60vh]"
-                  className="block w-full select-none"
+                  loadingClassName="min-h-[60vh]"
+                  className="block h-auto w-full select-none"
                 />
               </div>
             ))}
