@@ -39,6 +39,7 @@ import {
 } from "@/lib/suwayomi";
 import { SCRAPERS } from "@/lib/scrapers";
 import { keyToMangaId, syncNativeChapters } from "@/lib/scrapers/native";
+import { setCachedChapters } from "@/lib/chapterCache";
 
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 
@@ -325,7 +326,7 @@ async function syncMatch(
     const url = manga?.realUrl ?? null;
     const lang = source.lang || null;
     const now = new Date();
-    await prisma.sourceLink.upsert({
+    const link = await prisma.sourceLink.upsert({
       where: { sourceId_sourceMangaId: { sourceId: source.id, sourceMangaId: result.id } },
       create: {
         workId,
@@ -341,6 +342,7 @@ async function syncMatch(
       },
       update: { workId, sourceName, lang, url, chapterCount, latestAt, healthScore, lastSyncedAt: now },
     });
+    if (chapters.length) await setCachedChapters(link, chapters).catch(() => {});
     recordHit(source.id);
     if (coverage) coverage.hits += 1;
   } catch (e) {

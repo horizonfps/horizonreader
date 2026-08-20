@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import { resolveWorkFromRef, queueSourceResolve } from "@/lib/backbone/resolve";
+import { refreshChapters } from "@/lib/chapterCache";
 
 export const runtime = "nodejs";
 
@@ -17,9 +18,22 @@ export async function POST(req: NextRequest) {
 
   try {
     if (href.startsWith("/work/")) {
-      const slug = decodeURIComponent(href.slice("/work/".length).split("?")[0]);
+      const url = new URL(href, "http://internal");
+      const slug = decodeURIComponent(url.pathname.slice("/work/".length));
       const work = await prisma.work.findUnique({ where: { slug }, select: { id: true } });
-      if (work) queueSourceResolve(work.id);
+      if (work) {
+        const sourceId = Number(url.searchParams.get("src"));
+        if (Number.isInteger(sourceId) && sourceId > 0) {
+          const link = await prisma.sourceLink
+            .findFirst({ where: { id: sourceId, workId: work.id } })
+            .catch(() => null);
+          if (link) {
+            void refreshChapters(link).catch(() => {});
+            return NextResponse.json({ ok: true });
+          }
+        }
+        queueSourceResolve(work.id);
+      }
     } else if (href.startsWith("/w/")) {
       const url = new URL(href, "http://internal");
       const [, , origin, externalId] = url.pathname.split("/");
