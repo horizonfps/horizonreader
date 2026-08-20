@@ -18,6 +18,7 @@ import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
+import PrefetchLink from "@/components/PrefetchLink";
 import ResolvingSources from "@/components/ResolvingSources";
 
 export const dynamic = "force-dynamic";
@@ -56,6 +57,16 @@ function healthColor(score?: number | null): string {
   if (v >= 55) return "bg-green-500";
   if (v >= 30) return "bg-orange-500";
   return "bg-red-500";
+}
+
+async function chapterIdsForLink(link: {
+  id: number;
+  kind?: string | null;
+  sourceId?: string | null;
+  sourceMangaId: number;
+}): Promise<Set<number>> {
+  const chapters = await loadChaptersForLink(link);
+  return new Set(chapters.map((chapter) => chapter.id));
 }
 
 export default async function WorkPage({
@@ -224,9 +235,39 @@ async function SourcesAndChapters({
   const work = data?.work ?? null;
   const links: any[] = data?.links ?? [];
 
-  // Source selection: ?src picks a link, else the ranked primary/first.
+  const unfinishedProgress = uid
+    ? await prisma.progress
+        .findMany({
+          where: { userId: uid, workId, read: false, lastPageRead: { gt: 0 } },
+          orderBy: { updatedAt: "desc" },
+        })
+        .catch(() => [])
+    : [];
+
+  // An explicit source always wins; otherwise resume the source that owns the chapter.
   const selectedId = src ? Number(src) : null;
-  const selected = links.find((l) => l.id === selectedId) ?? links[0] ?? null;
+  let selectedFromProgress: any | null = null;
+  if (!src) {
+    const candidates = links.filter((link) =>
+      unfinishedProgress.some((progress) => progress.mangaId === link.sourceMangaId),
+    );
+    const chapterIdsByLink = new Map<number, Set<number>>();
+    await Promise.all(
+      candidates.map(async (link) => {
+        chapterIdsByLink.set(link.id, await chapterIdsForLink(link));
+      }),
+    );
+    for (const progress of unfinishedProgress) {
+      const matches = candidates.filter((link) =>
+        chapterIdsByLink.get(link.id)?.has(progress.chapterId),
+      );
+      if (matches.length === 1) {
+        selectedFromProgress = matches[0];
+        break;
+      }
+    }
+  }
+  const selected = links.find((l) => l.id === selectedId) ?? selectedFromProgress ?? links[0] ?? null;
 
   type ChapterView = {
     id: number;
@@ -265,14 +306,16 @@ async function SourcesAndChapters({
     ? dedupeByNumber(activeGroup.chapters).sort((a, b) => b.chapterNumber - a.chapterNumber)
     : [];
 
+  const visibleChapterIds = new Set(visible.map((chapter) => chapter.id));
   const progressList =
     uid && selected
-      ? await prisma.progress
-          .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
-          .catch(() => [])
+      ? (
+          await prisma.progress
+            .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
+            .catch(() => [])
+        ).filter((progress) => visibleChapterIds.has(progress.chapterId))
       : [];
 
-  const chapterIds = new Set(visible.map((c) => c.id));
   const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
 
   // Reading entry point: resume the in-progress chapter, else first unread.
@@ -283,7 +326,7 @@ async function SourcesAndChapters({
     const inProgress = progressList
       .filter((p) => !p.read && p.lastPageRead > 0)
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-    if (inProgress && chapterIds.has(inProgress.chapterId)) {
+    if (inProgress) {
       startId = inProgress.chapterId;
       startLabel = "Continuar";
     } else {
@@ -305,7 +348,7 @@ async function SourcesAndChapters({
             {links.map((link) => {
               const active = selected?.id === link.id;
               return (
-                <Link
+                <PrefetchLink
                   key={link.id}
                   href={`/work/${slug}?src=${link.id}`}
                   scroll={false}
@@ -316,7 +359,7 @@ async function SourcesAndChapters({
                   <span className={`h-1.5 w-1.5 rounded-full ${healthColor(link.healthScore)}`} />
                   <span className="max-w-[10rem] truncate">{link.sourceName || "Fonte"}</span>
                   <span className={active ? "text-on-accent" : "text-muted"}>{link.chapterCount}</span>
-                </Link>
+                </PrefetchLink>
               );
             })}
           </div>
