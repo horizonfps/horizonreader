@@ -59,6 +59,16 @@ function healthColor(score?: number | null): string {
   return "bg-red-500";
 }
 
+async function chapterIdsForLink(link: {
+  id: number;
+  kind?: string | null;
+  sourceId?: string | null;
+  sourceMangaId: number;
+}): Promise<Set<number>> {
+  const chapters = await loadChaptersForLink(link);
+  return new Set(chapters.map((chapter) => chapter.id));
+}
+
 export default async function WorkPage({
   params,
   searchParams,
@@ -234,16 +244,30 @@ async function SourcesAndChapters({
         .catch(() => [])
     : [];
 
-  // An explicit source always wins; otherwise resume the most recently updated source.
+  // An explicit source always wins; otherwise resume the source that owns the chapter.
   const selectedId = src ? Number(src) : null;
-  const selectedFromProgress = src
-    ? null
-    : unfinishedProgress.find((p) => links.some((l) => l.sourceMangaId === p.mangaId));
-  const selected =
-    links.find((l) => l.id === selectedId) ??
-    (selectedFromProgress ? links.find((l) => l.sourceMangaId === selectedFromProgress.mangaId) : null) ??
-    links[0] ??
-    null;
+  let selectedFromProgress: any | null = null;
+  if (!src) {
+    const candidates = links.filter((link) =>
+      unfinishedProgress.some((progress) => progress.mangaId === link.sourceMangaId),
+    );
+    const chapterIdsByLink = new Map<number, Set<number>>();
+    await Promise.all(
+      candidates.map(async (link) => {
+        chapterIdsByLink.set(link.id, await chapterIdsForLink(link));
+      }),
+    );
+    for (const progress of unfinishedProgress) {
+      const matches = candidates.filter((link) =>
+        chapterIdsByLink.get(link.id)?.has(progress.chapterId),
+      );
+      if (matches.length === 1) {
+        selectedFromProgress = matches[0];
+        break;
+      }
+    }
+  }
+  const selected = links.find((l) => l.id === selectedId) ?? selectedFromProgress ?? links[0] ?? null;
 
   type ChapterView = {
     id: number;
@@ -282,11 +306,14 @@ async function SourcesAndChapters({
     ? dedupeByNumber(activeGroup.chapters).sort((a, b) => b.chapterNumber - a.chapterNumber)
     : [];
 
+  const visibleChapterIds = new Set(visible.map((chapter) => chapter.id));
   const progressList =
     uid && selected
-      ? await prisma.progress
-          .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
-          .catch(() => [])
+      ? (
+          await prisma.progress
+            .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
+            .catch(() => [])
+        ).filter((progress) => visibleChapterIds.has(progress.chapterId))
       : [];
 
   const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
