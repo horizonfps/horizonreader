@@ -10,7 +10,7 @@
   "e2e": true,
   "autoMerge": true,
   "models": {
-    "agents": "gpt-5.6-luna",
-    "audit": "gpt-5.6-sol"
+    "agents": "opus",
+    "audit": "opus"
   }
 }

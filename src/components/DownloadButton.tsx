@@ -1,43 +1,83 @@
 "use client";
 
 import { useState } from "react";
+import { Check, Download } from "lucide-react";
+
+export type DownloadStatus = "QUEUED" | "RUNNING" | "DONE" | "ERROR";
+
+export type DownloadChapter = { chapterId: number; name: string; number: number };
+
+const LABELS: Record<DownloadStatus, string> = {
+  QUEUED: "Na fila",
+  RUNNING: "Baixando",
+  DONE: "Baixado",
+  ERROR: "Erro",
+};
 
 export default function DownloadButton({
-  chapterId,
-  downloaded,
+  chapters,
+  mangaId,
+  workId,
+  initialStatus = null,
+  label,
 }: {
-  chapterId: number;
-  downloaded: boolean;
+  chapters: DownloadChapter[];
+  mangaId: number;
+  workId: number;
+  initialStatus?: DownloadStatus | null;
+  label?: string;
 }) {
-  const [state, setState] = useState<"idle" | "queued" | "done">(
-    downloaded ? "done" : "idle",
-  );
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<DownloadStatus | null>(initialStatus);
+  const [queued, setQueued] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function download(e: React.MouseEvent) {
+  async function send(e: React.MouseEvent) {
+    // The chapter row is a link; the button must not navigate.
     e.preventDefault();
     e.stopPropagation();
-    if (state !== "idle") return;
-    setLoading(true);
+    if (busy || !chapters.length) return;
+    setBusy(true);
     const res = await fetch("/api/download", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ chapterId }),
-    });
-    if (res.ok) setState("queued");
-    setLoading(false);
+      body: JSON.stringify({ workId, mangaId, chapters }),
+    }).catch(() => null);
+    if (res?.ok) {
+      const data = (await res.json().catch(() => null)) as { queued?: number } | null;
+      setQueued(Number.isFinite(Number(data?.queued)) ? Number(data?.queued) : chapters.length);
+      setStatus("QUEUED");
+    }
+    setBusy(false);
   }
 
-  const label = state === "done" ? "Baixado" : state === "queued" ? "Na fila" : "Baixar";
+  const sent = queued !== null;
+  const done = status === "DONE";
+  const disabled = busy || done || sent || status === "QUEUED" || status === "RUNNING";
+
+  const text = label
+    ? sent
+      ? `Na fila (${queued})`
+      : label
+    : status
+      ? LABELS[status]
+      : "Baixar";
+
+  const Icon = done ? Check : Download;
 
   return (
     <button
-      onClick={download}
-      disabled={loading || state !== "idle"}
-      className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-60"
-      aria-label="Baixar capítulo"
+      type="button"
+      onClick={send}
+      disabled={disabled}
+      aria-label={label ?? "Baixar capítulo"}
+      className={
+        label
+          ? "flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-xs font-medium text-muted disabled:opacity-60"
+          : "flex shrink-0 items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-60"
+      }
     >
-      {loading ? "…" : label}
+      <Icon className="h-4 w-4" />
+      {busy ? "…" : text}
     </button>
   );
 }

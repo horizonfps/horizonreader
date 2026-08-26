@@ -7,5 +7,7 @@ export async function register(): Promise<void> {
     startFavoritesRefresh();
     const { startPageWarm } = await import("@/lib/pageWarm");
     startPageWarm();
+    const { startDownloadWorker } = await import("@/lib/downloads");
+    startDownloadWorker();
   }
 }
