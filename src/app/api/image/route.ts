@@ -27,6 +27,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+type CacheSource = "download" | "memory" | "disk" | "upstream";
+
+function imageResponse(
+  body: Uint8Array,
+  contentType: string,
+  cacheControl: string,
+  source: CacheSource,
+) {
+  return new NextResponse(new Uint8Array(body), {
+    status: 200,
+    headers: {
+      "content-type": contentType,
+      "cache-control": cacheControl,
+      "x-hr-cache": source,
+    },
+  });
+}
+
 // Never follow redirects: a whitelisted host answering 30x must not steer the
 // server-side fetch to an internal target.
 async function fetchUpstream(target: string, headers?: Record<string, string>) {
@@ -87,21 +105,23 @@ export async function GET(req: NextRequest) {
   const tier: Tier = isPage ? "page" : "cover";
   const cacheKey = isPage ? target : `cover:v1:${target}`;
 
-  const hot = getCachedImage(cacheKey);
-  if (hot) {
-    return new NextResponse(new Uint8Array(hot.body), {
-      status: 200,
-      headers: { "content-type": hot.contentType, "cache-control": cacheControl },
-    });
+  // An explicitly downloaded page wins over every other tier, so reading a
+  // downloaded chapter never reaches the source that serves the captcha.
+  if (isPage) {
+    const owned = await getDiskImage(cacheKey, "download");
+    if (owned) {
+      setCachedImage(cacheKey, owned.body, owned.contentType);
+      return imageResponse(owned.body, owned.contentType, cacheControl, "download");
+    }
   }
+
+  const hot = getCachedImage(cacheKey);
+  if (hot) return imageResponse(hot.body, hot.contentType, cacheControl, "memory");
 
   const cold = await getDiskImage(cacheKey, tier);
   if (cold) {
     setCachedImage(cacheKey, cold.body, cold.contentType);
-    return new NextResponse(new Uint8Array(cold.body), {
-      status: 200,
-      headers: { "content-type": cold.contentType, "cache-control": cacheControl },
-    });
+    return imageResponse(cold.body, cold.contentType, cacheControl, "disk");
   }
 
   const upstream = await fetchUpstream(
@@ -121,8 +141,5 @@ export async function GET(req: NextRequest) {
   setCachedImage(cacheKey, body, contentType);
   void setDiskImage(cacheKey, body, contentType, tier);
 
-  return new NextResponse(new Uint8Array(body), {
-    status: 200,
-    headers: { "content-type": contentType, "cache-control": cacheControl },
-  });
+  return imageResponse(body, contentType, cacheControl, "upstream");
 }

@@ -21,8 +21,55 @@ type ReaderData = {
   nextId: number | null;
 };
 
+type StoredChapter = { urls: string[]; mangaId: number };
+
+const SUWAYOMI_PAGE_PATH = /^\/api\/v1\/manga\/(\d+)\/chapter\//;
+
+// The image service worker is cache-first, so a page seen before the download
+// would be replayed from its pre-download response. A marker keeps the
+// downloaded read on its own url; the proxy ignores the extra param.
+function downloadUrl(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}dl=1`;
+}
+
+// A download queued without the manga id still carries it inside every stored
+// page path, which keeps the shortcut usable without asking the engine.
+function mangaIdFromPages(urls: string[]): number {
+  for (const url of urls) {
+    let path: string | null;
+    try {
+      path = new URL(url, "http://internal").searchParams.get("path");
+    } catch {
+      continue;
+    }
+    const match = path ? SUWAYOMI_PAGE_PATH.exec(path) : null;
+    if (match) return Number(match[1]);
+  }
+  return 0;
+}
+
+// A finished download already holds every page url, so the source is never
+// touched again for this chapter.
+async function storedChapter(chapterId: number): Promise<StoredChapter | null> {
+  const row = await prisma.chapterDownload
+    .findUnique({ where: { chapterId } })
+    .catch(() => null);
+  if (!row || row.status !== "DONE") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.pages);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const urls = parsed.filter((u): u is string => typeof u === "string" && u.length > 0);
+  if (!urls.length) return null;
+  const mangaId = row.mangaId > 0 ? row.mangaId : mangaIdFromPages(urls);
+  return { urls: urls.map(downloadUrl), mangaId };
+}
+
 // Native scraper chapter: pages scraped live, prev/next from persisted rows.
-async function loadNative(chapterId: number): Promise<ReaderData | null> {
+async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderData | null> {
   const rowId = chapterId - NATIVE_OFFSET;
   const row = await prisma.scrapedChapter
     .findUnique({
@@ -32,11 +79,16 @@ async function loadNative(chapterId: number): Promise<ReaderData | null> {
     .catch(() => null);
   if (!row) return null;
 
-  const scraper = getScraper(row.sourceLink.sourceId);
-  if (!scraper) return null;
-
-  const pages = await scraper.pages(row.chapterKey).catch(() => []);
-  if (!pages.length) return null;
+  let pages: string[];
+  if (stored?.length) {
+    pages = stored;
+  } else {
+    const scraper = getScraper(row.sourceLink.sourceId);
+    if (!scraper) return null;
+    const scraped = await scraper.pages(row.chapterKey).catch(() => []);
+    if (!scraped.length) return null;
+    pages = scraped.map(proxyScraperImage);
+  }
 
   const siblingRows = await prisma.scrapedChapter.findMany({
     where: { sourceLinkId: row.sourceLinkId },
@@ -59,7 +111,7 @@ async function loadNative(chapterId: number): Promise<ReaderData | null> {
   const nextId = idx >= 0 && idx < siblings.length - 1 ? NATIVE_OFFSET + siblings[idx + 1].id : null;
 
   return {
-    urls: pages.map(proxyScraperImage),
+    urls: pages,
     mangaId: row.sourceLink.sourceMangaId,
     workId: row.sourceLink.workId,
     workSlug: row.sourceLink.work?.slug ?? null,
@@ -71,12 +123,22 @@ async function loadNative(chapterId: number): Promise<ReaderData | null> {
 }
 
 // Suwayomi chapter: pages fetched from the engine, prev/next from its chapter list.
-async function loadSuwayomi(chapterId: number): Promise<ReaderData | null> {
-  const data = await fetchChapterPages(chapterId).catch(() => null);
-  if (!data) return null;
+async function loadSuwayomi(
+  chapterId: number,
+  stored?: StoredChapter,
+): Promise<ReaderData | null> {
+  let mangaId: number;
+  let urls: string[];
 
-  const { mangaId } = data;
-  const urls = suwayomiPageUrls(data);
+  if (stored) {
+    mangaId = stored.mangaId;
+    urls = stored.urls;
+  } else {
+    const data = await fetchChapterPages(chapterId).catch(() => null);
+    if (!data) return null;
+    mangaId = data.mangaId;
+    urls = suwayomiPageUrls(data);
+  }
 
   // Navigate within the current chapter's scanlator only, so next/prev advances
   // by number instead of jumping to another scan's upload of the same chapter.
@@ -111,9 +173,14 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
   const session = await getSession();
   if (!Number.isInteger(chapterId) || !session) notFound();
 
-  const data = isNativeChapterId(chapterId)
-    ? await loadNative(chapterId)
-    : await loadSuwayomi(chapterId);
+  const native = isNativeChapterId(chapterId);
+  const download = await storedChapter(chapterId);
+  // A Suwayomi row without mangaId cannot resolve title and prev/next.
+  const stored = download && (native || download.mangaId > 0) ? download : null;
+
+  const data = native
+    ? await loadNative(chapterId, stored?.urls)
+    : await loadSuwayomi(chapterId, stored ?? undefined);
   if (!data) notFound();
 
   const prog = await prisma.progress.findUnique({
@@ -137,6 +204,7 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
       title={data.title}
       prevChapterId={data.prevId}
       nextChapterId={data.nextId}
+      downloaded={!!stored}
     />
   );
 }
