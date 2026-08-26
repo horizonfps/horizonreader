@@ -13,6 +13,7 @@ import {
   revalidateChapters,
 } from "@/lib/chapterCache";
 import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
+import { pickResumeChapter, formatChapterNumber, type ResumeKind } from "@/lib/continueReading";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
@@ -24,6 +25,12 @@ import ResolvingSources from "@/components/ResolvingSources";
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 86_400_000;
+const RESUME_PREFIX: Record<ResumeKind, string> = {
+  start: "Começar a ler",
+  resume: "Continuar",
+  next: "Continuar",
+  reread: "Reler último",
+};
 // How long a first-time source resolve may block the request before the page
 // paints; the resolve keeps running in the background past this budget.
 const RESOLVE_BUDGET_MS = 3_500;
@@ -318,23 +325,13 @@ async function SourcesAndChapters({
 
   const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
 
-  // Reading entry point: resume the in-progress chapter, else first unread.
+  // Reading entry point: the furthest point reached, never a skipped chapter.
   const chaptersAsc = [...visible].reverse();
-  let startId: number | null = null;
-  let startLabel = "Começar a ler";
-  if (visible.length) {
-    const inProgress = progressList
-      .filter((p) => !p.read && p.lastPageRead > 0)
-      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
-    if (inProgress) {
-      startId = inProgress.chapterId;
-      startLabel = "Continuar";
-    } else {
-      const firstUnread = chaptersAsc.find((c) => !readSet.has(c.id));
-      startId = (firstUnread ?? chaptersAsc[0]).id;
-      startLabel = readSet.size > 0 ? "Continuar" : "Começar a ler";
-    }
-  }
+  const resume = pickResumeChapter(chaptersAsc, progressList);
+  const startId = resume?.chapterId ?? null;
+  const startLabel = resume
+    ? `${RESUME_PREFIX[resume.kind]} · Cap. ${formatChapterNumber(resume.chapterNumber)}`
+    : "";
 
   return (
     <div className="space-y-6">
