@@ -64,6 +64,7 @@ model Work {
   favorites     Favorite[]
   progress      Progress[]
   history       ReadingHistory[]
+  downloads     ChapterDownload[]
   horizonPick   HorizonPick?
 
   @@unique([origin, externalId])
@@ -167,6 +168,29 @@ model Progress {
   @@unique([userId, chapterId])
   @@index([userId, mangaId])
   @@index([userId, workId])
+}
+
+// Chapters pinned to the server's own disk, so reading them never touches the
+// scan source again.
+model ChapterDownload {
+  id            Int      @id @default(autoincrement())
+  workId        Int?
+  mangaId       Int      @default(0)
+  chapterId     Int      @unique
+  chapterName   String   @default("")
+  chapterNumber Float    @default(0)
+  status        String   @default("QUEUED") // QUEUED | RUNNING | DONE | ERROR
+  pageCount     Int      @default(0)
+  pagesDone     Int      @default(0)
+  bytes         Int      @default(0)
+  pages         String   @default("[]") // JSON array of proxied page urls
+  error         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  work          Work?    @relation(fields: [workId], references: [id], onDelete: SetNull)
+
+  @@index([workId])
+  @@index([status])
 }
 
 // Append-only reading events for the profile timeline + xlsx export.

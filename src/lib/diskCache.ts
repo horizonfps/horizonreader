@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export type Tier = "page" | "cover";
+export type Tier = "page" | "cover" | "download";
 
 const COVER_MAX_AGE_MS = 7 * 86_400_000;
 
@@ -24,7 +24,19 @@ const TIERS: Record<Tier, { dir: string; maxBytes: number; maxAgeMs: number | nu
     maxBytes: Number(process.env.COVER_CACHE_DISK_MB || 1_024) * 1024 * 1024,
     maxAgeMs: COVER_MAX_AGE_MS,
   },
+  // Explicit downloads: the user asked for these, so nothing evicts them.
+  download: {
+    dir:
+      process.env.CHAPTER_DOWNLOAD_DIR ||
+      (existsSync("/data") ? "/data/downloads" : ".cache/downloads"),
+    maxBytes: Infinity,
+    maxAgeMs: null,
+  },
 };
+
+export function tierDir(tier: Tier): string {
+  return TIERS[tier].dir;
+}
 
 const SWEEP_EVERY_MS = 10 * 60_000;
 
@@ -89,8 +101,22 @@ export async function setDiskImage(
   void sweep(tier);
 }
 
+export async function deleteDiskImage(key: string, tier: Tier): Promise<void> {
+  try {
+    await unlink(pathFor(tier, key, ".bin"));
+  } catch {
+    /* already gone */
+  }
+  try {
+    await unlink(pathFor(tier, key, ".ct"));
+  } catch {
+    /* already gone */
+  }
+}
+
 // Age/size-based eviction, throttled so it never runs on a hot request path.
 async function sweep(tier: Tier): Promise<void> {
+  if (TIERS[tier].maxBytes === Infinity) return;
   const now = Date.now();
   if (sweepingByTier.has(tier) || now - (lastSweepByTier.get(tier) ?? 0) < SWEEP_EVERY_MS) return;
   sweepingByTier.add(tier);
