@@ -18,6 +18,7 @@ type Props = {
   title: string;
   prevChapterId: number | null;
   nextChapterId: number | null;
+  downloaded?: boolean;
 };
 
 const SETTINGS_KEY = "reader:settings";
@@ -153,6 +154,7 @@ export default function Reader({
   title,
   prevChapterId,
   nextChapterId,
+  downloaded,
 }: Props) {
   const router = useRouter();
   const total = pageUrls.length;
@@ -588,6 +590,11 @@ export default function Reader({
               ‹
             </Link>
             <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
+            {downloaded ? (
+              <span className="shrink-0 rounded bg-white/15 px-1.5 py-0.5 text-[10px]">
+                Baixado
+              </span>
+            ) : null}
             <button
               onClick={(e) => {
                 e.stopPropagation();
