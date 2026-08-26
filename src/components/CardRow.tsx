@@ -14,9 +14,11 @@ export type RowItem = {
 export default function CardRow({
   items,
   showTitle = true,
+  prefetch,
 }: {
   items: RowItem[];
   showTitle?: boolean;
+  prefetch?: boolean;
 }) {
   if (!items.length) return null;
   return (
@@ -28,6 +30,7 @@ export default function CardRow({
           <PrefetchLink
             key={`${it.href}:${i}`}
             href={it.href}
+            prefetch={prefetch}
             className="flex-[0_0_31%] shrink-0 sm:flex-[0_0_23%] md:flex-[0_0_18%] lg:flex-[0_0_14%] xl:flex-[0_0_12%]"
           >
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">

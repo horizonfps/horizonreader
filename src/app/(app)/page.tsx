@@ -13,30 +13,26 @@ import FavoritesCarousel from "@/components/FavoritesCarousel";
 
 export const dynamic = "force-dynamic";
 
-type HistoryEntry = { chapterId: number; slug: string; title: string; coverUrl: string | null };
+type HistoryEntry = { workId: number; title: string; coverUrl: string | null };
 type FavEntry = { slug: string; title: string; coverUrl: string | null; rating: number | null };
 
-// Most-recent unfinished progress per work, capped for the "Continuar" strip.
+// Most-recently touched works, finished chapters included: where the reading
+// resumes is decided by /continue/<workId>, not by the row picked here.
 async function getHistory(userId: number): Promise<HistoryEntry[]> {
   try {
     const rows = await prisma.progress.findMany({
-      where: { userId, read: false, lastPageRead: { gt: 0 }, workId: { not: null } },
+      where: { userId, workId: { not: null } },
       orderBy: { updatedAt: "desc" },
       include: { work: true },
-      take: 30,
+      take: 60,
     });
     const seen = new Set<number>();
     const out: HistoryEntry[] = [];
     for (const r of rows) {
       if (!r.work || r.workId === null || seen.has(r.workId)) continue;
       seen.add(r.workId);
-      out.push({
-        chapterId: r.chapterId,
-        slug: r.work.slug,
-        title: r.work.title,
-        coverUrl: r.work.coverUrl,
-      });
-      if (out.length >= 30) break;
+      out.push({ workId: r.workId, title: r.work.title, coverUrl: r.work.coverUrl });
+      if (out.length >= 20) break;
     }
     return out;
   } catch {
@@ -103,8 +99,9 @@ export default async function HomePage() {
         <section>
           <h2 className="mb-2 text-sm text-muted">Continuar</h2>
           <CardRow
+            prefetch={false}
             items={history.map((h) => ({
-              href: `/reader/${h.chapterId}`,
+              href: `/continue/${h.workId}`,
               title: h.title,
               coverUrl: h.coverUrl,
             }))}
