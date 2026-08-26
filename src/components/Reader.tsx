@@ -32,6 +32,21 @@ const NEXT_CHAPTER_PAGES = 3;
 // A prefetched dynamic route payload is only kept ~30s client-side
 // (next.config.mjs's staleTimes.dynamic), so the prefetch is repeated.
 const REPREFETCH_EVERY_MS = 25_000;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 5;
+const ZOOM_STEP = 1.25;
+const ZOOM_DBLCLICK = 2.5;
+
+function clampScale(s: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+}
+
+function touchDistance(touches: React.TouchList): number {
+  return Math.hypot(
+    touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY,
+  );
+}
 
 function retryUrl(url: string, attempt: number): string {
   if (attempt === 0) return url;
@@ -148,6 +163,9 @@ export default function Reader({
   const [page, setPage] = useState(initialPage);
   const [showUI, setShowUI] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -160,6 +178,14 @@ export default function Reader({
   const armedRef = useRef(initialPage <= 0);
   const warmedNextRef = useRef(false);
   const lastNextPrefetchRef = useRef(0);
+
+  const zoomLayerRef = useRef<HTMLDivElement>(null);
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const offsetRef = useRef(offset);
+  offsetRef.current = offset;
+  const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
 
   // load persisted settings
   useEffect(() => {
@@ -347,12 +373,116 @@ export default function Reader({
   useEffect(() => {
     if (mode !== "paged") return;
     const onKey = (e: KeyboardEvent) => {
+      if (zoomIndex !== null) return;
       if (e.key === "ArrowRight") dir === "rtl" ? goPrevPage() : goNextPage();
       if (e.key === "ArrowLeft") dir === "rtl" ? goNextPage() : goPrevPage();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, dir, goNextPage, goPrevPage]);
+  }, [mode, dir, zoomIndex, goNextPage, goPrevPage]);
+
+  const openZoom = useCallback((i: number) => {
+    setZoomIndex(i);
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+    setShowUI(false);
+  }, []);
+
+  const closeZoom = useCallback(() => setZoomIndex(null), []);
+
+  const resetZoom = useCallback(() => {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  }, []);
+
+  const applyScale = useCallback((next: number) => {
+    const s = clampScale(next);
+    setScale(s);
+    if (s === ZOOM_MIN) setOffset({ x: 0, y: 0 });
+  }, []);
+
+  // React's onWheel is passive, so it can't stop the chapter scrolling behind.
+  useEffect(() => {
+    if (zoomIndex === null) return;
+    const el = zoomLayerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      applyScale(scaleRef.current * (e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomIndex, applyScale]);
+
+  useEffect(() => {
+    if (zoomIndex === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeZoom();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomIndex, closeZoom]);
+
+  const onZoomPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch" || scaleRef.current <= ZOOM_MIN) return;
+    dragRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      ox: offsetRef.current.x,
+      oy: offsetRef.current.y,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onZoomPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setOffset({ x: d.ox + e.clientX - d.x, y: d.oy + e.clientY - d.y });
+  };
+
+  const onZoomPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const onZoomTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length >= 2) {
+      pinchRef.current = { dist: touchDistance(e.touches), scale: scaleRef.current };
+      dragRef.current = null;
+      return;
+    }
+    if (e.touches.length === 1 && scaleRef.current > ZOOM_MIN) {
+      dragRef.current = {
+        x: e.touches[0].clientX,
+        y: e.touches[0].clientY,
+        ox: offsetRef.current.x,
+        oy: offsetRef.current.y,
+      };
+    }
+  };
+
+  const onZoomTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    const pinch = pinchRef.current;
+    if (e.touches.length >= 2 && pinch && pinch.dist > 0) {
+      applyScale(pinch.scale * (touchDistance(e.touches) / pinch.dist));
+      return;
+    }
+    const d = dragRef.current;
+    if (e.touches.length === 1 && d) {
+      setOffset({
+        x: d.ox + e.touches[0].clientX - d.x,
+        y: d.oy + e.touches[0].clientY - d.y,
+      });
+    }
+  };
+
+  const onZoomTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length < 2) pinchRef.current = null;
+    if (e.touches.length === 0) dragRef.current = null;
+  };
 
   function onTapZones(e: React.MouseEvent<HTMLDivElement>) {
     const x = e.clientX;
@@ -391,6 +521,7 @@ export default function Reader({
                 ref={(el) => {
                   wrapRefs.current[i] = el;
                 }}
+                onDoubleClick={() => openZoom(i)}
               >
                 <PageImage
                   url={url}
@@ -416,7 +547,7 @@ export default function Reader({
           </div>
         </div>
       ) : (
-        <div className="h-full w-full" onClick={onTapZones}>
+        <div className="h-full w-full" onClick={onTapZones} onDoubleClick={() => openZoom(page)}>
           <div className="flex h-full w-full items-center justify-center">
             <PageImage
               key={page}
@@ -457,6 +588,15 @@ export default function Reader({
               ‹
             </Link>
             <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openZoom(page);
+              }}
+              className="text-xs"
+            >
+              Ampliar
+            </button>
             <button onClick={() => setSettingsOpen((v) => !v)} className="text-xs">
               Ajustes
             </button>
@@ -551,6 +691,90 @@ export default function Reader({
             >
               Fechar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---- fullscreen zoom layer ---- */}
+      {zoomIndex !== null && (
+        <div
+          ref={zoomLayerRef}
+          onClick={closeZoom}
+          onTouchStart={onZoomTouchStart}
+          onTouchMove={onZoomTouchMove}
+          onTouchEnd={onZoomTouchEnd}
+          onTouchCancel={onZoomTouchEnd}
+          style={{ touchAction: "none" }}
+          className="absolute inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/95"
+        >
+          <div className="absolute right-3 top-3 z-10 flex gap-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                applyScale(scale / ZOOM_STEP);
+              }}
+              aria-label="Reduzir"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg leading-none text-white backdrop-blur"
+            >
+              −
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                resetZoom();
+              }}
+              aria-label="Voltar ao tamanho original"
+              className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-full bg-white/15 px-2 text-xs tabular-nums text-white backdrop-blur"
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                applyScale(scale * ZOOM_STEP);
+              }}
+              aria-label="Ampliar"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg leading-none text-white backdrop-blur"
+            >
+              +
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                closeZoom();
+              }}
+              aria-label="Fechar"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-sm leading-none text-white backdrop-blur"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              applyScale(scale > ZOOM_MIN ? ZOOM_MIN : ZOOM_DBLCLICK);
+            }}
+            onPointerDown={onZoomPointerDown}
+            onPointerMove={onZoomPointerMove}
+            onPointerUp={onZoomPointerUp}
+            onPointerCancel={onZoomPointerUp}
+            style={{ touchAction: "none", cursor: scale > ZOOM_MIN ? "grab" : "default" }}
+            className="flex max-h-full max-w-full items-center justify-center"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={pageUrls[zoomIndex]}
+              alt=""
+              draggable={false}
+              className="max-h-[100dvh] max-w-full select-none object-contain"
+              style={{
+                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+                transformOrigin: "center",
+                transition: "none",
+              }}
+            />
           </div>
         </div>
       )}
