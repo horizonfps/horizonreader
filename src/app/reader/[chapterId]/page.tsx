@@ -23,11 +23,29 @@ type ReaderData = {
 
 type StoredChapter = { urls: string[]; mangaId: number };
 
+const SUWAYOMI_PAGE_PATH = /^\/api\/v1\/manga\/(\d+)\/chapter\//;
+
 // The image service worker is cache-first, so a page seen before the download
 // would be replayed from its pre-download response. A marker keeps the
 // downloaded read on its own url; the proxy ignores the extra param.
 function downloadUrl(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}dl=1`;
+}
+
+// A download queued without the manga id still carries it inside every stored
+// page path, which keeps the shortcut usable without asking the engine.
+function mangaIdFromPages(urls: string[]): number {
+  for (const url of urls) {
+    let path: string | null;
+    try {
+      path = new URL(url, "http://internal").searchParams.get("path");
+    } catch {
+      continue;
+    }
+    const match = path ? SUWAYOMI_PAGE_PATH.exec(path) : null;
+    if (match) return Number(match[1]);
+  }
+  return 0;
 }
 
 // A finished download already holds every page url, so the source is never
@@ -46,7 +64,8 @@ async function storedChapter(chapterId: number): Promise<StoredChapter | null> {
   if (!Array.isArray(parsed)) return null;
   const urls = parsed.filter((u): u is string => typeof u === "string" && u.length > 0);
   if (!urls.length) return null;
-  return { urls: urls.map(downloadUrl), mangaId: row.mangaId };
+  const mangaId = row.mangaId > 0 ? row.mangaId : mangaIdFromPages(urls);
+  return { urls: urls.map(downloadUrl), mangaId };
 }
 
 // Native scraper chapter: pages scraped live, prev/next from persisted rows.
