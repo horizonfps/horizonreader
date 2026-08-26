@@ -18,6 +18,7 @@ import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
+import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
 import PrefetchLink from "@/components/PrefetchLink";
 import ResolvingSources from "@/components/ResolvingSources";
@@ -314,6 +315,19 @@ async function SourcesAndChapters({
     : [];
 
   const visibleChapterIds = new Set(visible.map((chapter) => chapter.id));
+
+  const downloadRows = visibleChapterIds.size
+    ? await prisma.chapterDownload
+        .findMany({
+          where: { chapterId: { in: [...visibleChapterIds] } },
+          select: { chapterId: true, status: true },
+        })
+        .catch(() => [])
+    : [];
+  const downloadStatusByChapter = new Map<number, DownloadStatus>(
+    downloadRows.map((row) => [row.chapterId, row.status as DownloadStatus]),
+  );
+
   const progressList =
     uid && selected
       ? (
@@ -332,6 +346,15 @@ async function SourcesAndChapters({
   const startLabel = resume
     ? `${RESUME_PREFIX[resume.kind]} · Cap. ${formatChapterNumber(resume.chapterNumber)}`
     : "";
+
+  // Shortcut payload: the resume target plus the four chapters after it.
+  const resumeIndex = resume ? chaptersAsc.findIndex((c) => c.id === resume.chapterId) : -1;
+  const nextChapters =
+    resumeIndex >= 0
+      ? chaptersAsc
+          .slice(resumeIndex, resumeIndex + 5)
+          .map((c) => ({ chapterId: c.id, name: c.name, number: c.chapterNumber }))
+      : [];
 
   return (
     <div className="space-y-6">
@@ -395,13 +418,23 @@ async function SourcesAndChapters({
         </h2>
 
         {startId ? (
-          <Link
-            href={`/reader/${startId}`}
-            className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-hover"
-          >
-            <BookOpen className="h-4 w-4" />
-            {startLabel}
-          </Link>
+          <div className="mb-3 flex gap-2">
+            <Link
+              href={`/reader/${startId}`}
+              className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-hover"
+            >
+              <BookOpen className="h-4 w-4" />
+              {startLabel}
+            </Link>
+            {selected && nextChapters.length > 0 ? (
+              <DownloadButton
+                label="Baixar 5 próximos"
+                chapters={nextChapters}
+                mangaId={selected.sourceMangaId}
+                workId={workId}
+              />
+            ) : null}
+          </div>
         ) : null}
 
         {visible.length === 0 ? (
@@ -418,14 +451,25 @@ async function SourcesAndChapters({
               const read = readSet.has(c.id);
               const sub = fmtDate(c.uploadDate);
               return (
-                <li key={c.id}>
-                  <Link href={`/reader/${c.id}`} className="flex items-center gap-3 py-2.5">
+                <li key={c.id} className="flex items-center gap-2">
+                  <Link
+                    href={`/reader/${c.id}`}
+                    className="flex min-w-0 flex-1 items-center gap-3 py-2.5"
+                  >
                     <div className="min-w-0 flex-1">
                       <p className={`truncate text-sm ${read ? "text-muted" : "text-text"}`}>{c.name}</p>
                       {sub ? <p className="truncate text-xs text-muted">{sub}</p> : null}
                     </div>
                     {read ? <Check className="h-4 w-4 shrink-0 text-muted" /> : null}
                   </Link>
+                  {selected ? (
+                    <DownloadButton
+                      chapters={[{ chapterId: c.id, name: c.name, number: c.chapterNumber }]}
+                      mangaId={selected.sourceMangaId}
+                      workId={workId}
+                      initialStatus={downloadStatusByChapter.get(c.id) ?? null}
+                    />
+                  ) : null}
                 </li>
               );
             })}
