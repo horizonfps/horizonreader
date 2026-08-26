@@ -713,7 +713,7 @@ export default function Reader({
                 e.stopPropagation();
                 applyScale(scale / ZOOM_STEP);
               }}
-              aria-label="Reduzir"
+              aria-label="Reduzir zoom"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg leading-none text-white backdrop-blur"
             >
               −
@@ -733,7 +733,7 @@ export default function Reader({
                 e.stopPropagation();
                 applyScale(scale * ZOOM_STEP);
               }}
-              aria-label="Ampliar"
+              aria-label="Aumentar zoom"
               className="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg leading-none text-white backdrop-blur"
             >
               +
