@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   description: "A private reading library.",
   robots: { index: false, follow: false },
   icons: { icon: "/icon.png", apple: "/icon.png" },
+  manifest: "/manifest.webmanifest",
 };
 
 export const viewport: Viewport = {
