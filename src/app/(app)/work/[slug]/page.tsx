@@ -13,6 +13,7 @@ import {
   revalidateChapters,
 } from "@/lib/chapterCache";
 import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
+import { findChapterMatch } from "@/lib/chapterMatch";
 import { pickResumeChapter, formatChapterNumber, type ResumeKind } from "@/lib/continueReading";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
@@ -289,14 +290,9 @@ async function SourcesAndChapters({
     workDownloads.map((row) => [row.chapterId, row.status as DownloadStatus]),
   );
   const doneByMangaId = new Map<number, number>();
-  const doneCandidatesByNumber = new Map<number, { chapterId: number; mangaId: number }[]>();
   for (const row of workDownloads) {
     if (row.status !== "DONE") continue;
     doneByMangaId.set(row.mangaId, (doneByMangaId.get(row.mangaId) ?? 0) + 1);
-    if (!(row.chapterNumber > 0)) continue;
-    const candidates = doneCandidatesByNumber.get(row.chapterNumber) ?? [];
-    candidates.push({ chapterId: row.chapterId, mangaId: row.mangaId });
-    doneCandidatesByNumber.set(row.chapterNumber, candidates);
   }
 
   const explicitLink = links.find((l) => l.id === selectedId) ?? null;
@@ -313,15 +309,6 @@ async function SourcesAndChapters({
   }
   const selected =
     explicitLink ?? selectedFromProgress ?? mostDownloadedLink ?? links[0] ?? null;
-
-  // Same chapter number downloaded on two sources: the open one wins.
-  const downloadedByNumber = new Map<number, number>();
-  for (const [number, candidates] of doneCandidatesByNumber) {
-    const preferred =
-      candidates.find((candidate) => candidate.mangaId === selected?.sourceMangaId) ??
-      candidates[0];
-    downloadedByNumber.set(number, preferred.chapterId);
-  }
 
   type ChapterView = {
     id: number;
@@ -341,6 +328,26 @@ async function SourcesAndChapters({
       if (chapters.length) await setCachedChapters(selected, chapters);
     }
   }
+
+  // Chapters already on disk, from any source of this work: the pool the open
+  // source's rows are matched against by number, name and upload date.
+  const doneIds = new Set(
+    workDownloads.filter((row) => row.status === "DONE").map((row) => row.chapterId),
+  );
+  const scanLinks = links
+    .filter((link) => (doneByMangaId.get(link.sourceMangaId) ?? 0) > 0)
+    .slice(0, 4);
+  const scanned = await Promise.all(
+    scanLinks.map(async (link) => {
+      if (selected && link.id === selected.id) return chapters;
+      const hit = await getCachedChapters<ChapterView[]>(link);
+      if (hit) return hit.data;
+      const list = (await loadChaptersForLink(link)) as ChapterView[];
+      if (list.length) await setCachedChapters(link, list);
+      return list;
+    }),
+  );
+  const downloadedElsewhere = scanned.flat().filter((c) => doneIds.has(c.id));
 
   // Split the source's chapters by scanlator so a single scan group reads clean.
   // ?scan picks a group; else the largest. dedupeByNumber drops re-uploads so
@@ -377,9 +384,10 @@ async function SourcesAndChapters({
   const chaptersAsc = [...visible].reverse();
   const resume = pickResumeChapter(chaptersAsc, progressList);
   const resumeOwnStatus = resume ? downloadStatusByChapter.get(resume.chapterId) ?? null : null;
+  const resumeChapter = resume ? chaptersAsc.find((c) => c.id === resume.chapterId) ?? null : null;
   const resumeMirroredId =
-    resume && resumeOwnStatus !== "DONE"
-      ? downloadedByNumber.get(resume.chapterNumber) ?? null
+    resumeChapter && resumeOwnStatus !== "DONE"
+      ? findChapterMatch(resumeChapter, downloadedElsewhere)?.id ?? null
       : null;
   const startId = resumeMirroredId ?? resume?.chapterId ?? null;
   const startLabel = resume
@@ -502,8 +510,9 @@ async function SourcesAndChapters({
               const read = readSet.has(c.id);
               const sub = fmtDate(c.uploadDate);
               const ownStatus = downloadStatusByChapter.get(c.id) ?? null;
-              const mirroredId =
-                ownStatus === "DONE" ? null : downloadedByNumber.get(c.chapterNumber) ?? null;
+              const mirrored =
+                ownStatus === "DONE" ? null : findChapterMatch(c, downloadedElsewhere);
+              const mirroredId = mirrored?.id ?? null;
               const status = ownStatus ?? (mirroredId ? "DONE" : null);
               return (
                 <li key={c.id} className="flex items-center gap-2">
