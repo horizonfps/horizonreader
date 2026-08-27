@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 
 export type Policy = {
   quotaMb: number;
+  perUserQuotaMb: number;
   keepDays: number;
   minFreeGb: number;
   windowStart: string;
@@ -20,6 +21,7 @@ export type Gate = {
 
 export const DEFAULT_POLICY: Policy = {
   quotaMb: 0,
+  perUserQuotaMb: 0,
   keepDays: 0,
   minFreeGb: 2,
   windowStart: "",
@@ -46,6 +48,7 @@ export async function getPolicy(): Promise<Policy> {
     if (!row) return DEFAULT_POLICY;
     return {
       quotaMb: row.quotaMb,
+      perUserQuotaMb: row.perUserQuotaMb,
       keepDays: row.keepDays,
       minFreeGb: row.minFreeGb,
       windowStart: row.windowStart,
@@ -61,6 +64,10 @@ export async function savePolicy(input: Partial<Policy>): Promise<Policy> {
   const current = await getPolicy();
   const next: Policy = {
     quotaMb: input.quotaMb === undefined ? current.quotaMb : intOr(input.quotaMb, current.quotaMb),
+    perUserQuotaMb:
+      input.perUserQuotaMb === undefined
+        ? current.perUserQuotaMb
+        : intOr(input.perUserQuotaMb, current.perUserQuotaMb),
     keepDays:
       input.keepDays === undefined ? current.keepDays : intOr(input.keepDays, current.keepDays),
     minFreeGb:

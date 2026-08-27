@@ -9,6 +9,7 @@ function parsePolicy(body: unknown): Partial<Policy> {
   const b = (body ?? {}) as Record<string, unknown>;
   const out: Partial<Policy> = {};
   if (b.quotaMb !== undefined) out.quotaMb = Number(b.quotaMb);
+  if (b.perUserQuotaMb !== undefined) out.perUserQuotaMb = Number(b.perUserQuotaMb);
   if (b.keepDays !== undefined) out.keepDays = Number(b.keepDays);
   if (b.minFreeGb !== undefined) out.minFreeGb = Number(b.minFreeGb);
   if (b.windowStart !== undefined) out.windowStart = String(b.windowStart);

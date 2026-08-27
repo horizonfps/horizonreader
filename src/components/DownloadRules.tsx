@@ -5,6 +5,7 @@ import { bytes } from "@/components/info/ui";
 
 export type Policy = {
   quotaMb: number;
+  perUserQuotaMb: number;
   keepDays: number;
   minFreeGb: number;
   windowStart: string;
@@ -28,6 +29,7 @@ export default function DownloadRules({
   onChanged: () => void;
 }) {
   const [quotaMb, setQuotaMb] = useState(String(policy.quotaMb));
+  const [perUserQuotaMb, setPerUserQuotaMb] = useState(String(policy.perUserQuotaMb ?? 0));
   const [keepDays, setKeepDays] = useState(String(policy.keepDays));
   const [minFreeGb, setMinFreeGb] = useState(String(policy.minFreeGb));
   const [windowStart, setWindowStart] = useState(policy.windowStart);
@@ -51,6 +53,7 @@ export default function DownloadRules({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           quotaMb: numberOf(quotaMb),
+          perUserQuotaMb: numberOf(perUserQuotaMb),
           keepDays: numberOf(keepDays),
           minFreeGb: numberOf(minFreeGb),
           windowStart,
@@ -114,6 +117,18 @@ export default function DownloadRules({
             className={`mt-1 ${FIELD}`}
           />
           <span className="mt-0.5 block text-[11px] text-muted">0 = sem limite</span>
+        </label>
+
+        <label className="block">
+          <span className="text-[11px] text-muted">Cota por usuário (MB)</span>
+          <input
+            type="number"
+            min="0"
+            value={perUserQuotaMb}
+            onChange={(e) => setPerUserQuotaMb(e.target.value)}
+            className={`mt-1 ${FIELD}`}
+          />
+          <span className="mt-0.5 block text-[11px] text-muted">0 = sem limite por usuário</span>
         </label>
 
         <label className="block">
