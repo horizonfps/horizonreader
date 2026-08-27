@@ -34,7 +34,17 @@ export type DownloadItem = {
   pagesDone: number;
   bytes: number;
   error: string | null;
+  owner: string | null;
   updatedAt: string;
+};
+
+export type DownloadUserUsage = {
+  userId: number;
+  username: string;
+  bytes: number;
+  chapters: number;
+  quotaMb: number;
+  quotaBytes: number;
 };
 
 export type DownloadStorage = {
@@ -106,6 +116,30 @@ async function totalDownloadBytes(): Promise<number> {
   return rows.reduce((acc, r) => acc + r.bytes, 0);
 }
 
+export async function userDownloadBytes(userId: number): Promise<number> {
+  try {
+    const agg = await prisma.chapterDownload.aggregate({
+      _sum: { bytes: true },
+      where: { userId },
+    });
+    return agg._sum.bytes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Own quota wins; 0 falls back to the policy default. 0 on both = no limit.
+function effectiveQuotaMb(ownQuotaMb: number, policy: Policy): number {
+  return ownQuotaMb > 0 ? ownQuotaMb : policy.perUserQuotaMb;
+}
+
+async function userQuotaMb(userId: number, policy: Policy): Promise<number> {
+  const user = await prisma.user
+    .findUnique({ where: { id: userId }, select: { downloadQuotaMb: true } })
+    .catch(() => null);
+  return effectiveQuotaMb(user?.downloadQuotaMb ?? 0, policy);
+}
+
 // Age cleanup first, then quota: drops the oldest finished chapters until the
 // total fits under 90% of the quota.
 export async function enforceStorage(): Promise<{ removed: number; bytesFreed: number }> {
@@ -142,6 +176,30 @@ export async function enforceStorage(): Promise<{ removed: number; bytesFreed: n
         if (total <= quota * 0.9) break;
       }
     }
+
+    const perUser = await prisma.chapterDownload
+      .groupBy({ by: ["userId"], _sum: { bytes: true } })
+      .catch(() => [] as { userId: number | null; _sum: { bytes: number | null } }[]);
+
+    for (const group of perUser) {
+      const userId = group.userId;
+      if (userId === null) continue;
+      const quotaMb = await userQuotaMb(userId, policy);
+      if (quotaMb <= 0) continue;
+      const quota = quotaMb * 1024 * 1024;
+      let total = group._sum.bytes ?? 0;
+      while (total > quota) {
+        const oldest = await prisma.chapterDownload
+          .findFirst({ where: { status: "DONE", userId }, orderBy: { updatedAt: "asc" } })
+          .catch(() => null);
+        if (!oldest) break;
+        if (!(await removeDownload(oldest.chapterId))) break;
+        removed += 1;
+        bytesFreed += oldest.bytes;
+        total -= oldest.bytes;
+        if (total <= quota * 0.9) break;
+      }
+    }
   } catch {
     /* housekeeping never breaks the caller */
   }
@@ -150,13 +208,21 @@ export async function enforceStorage(): Promise<{ removed: number; bytesFreed: n
 
 export async function queueChapterDownloads(
   items: { chapterId: number; mangaId?: number; workId?: number; name?: string; number?: number }[],
-): Promise<{ queued: number; blocked: "quota" | null }> {
+  userId: number | null = null,
+): Promise<{ queued: number; blocked: "quota" | "user_quota" | null }> {
   const policy = await getPolicy();
   if (policy.quotaMb > 0) {
     const quota = policy.quotaMb * 1024 * 1024;
     if ((await totalDownloadBytes()) >= quota) {
       await enforceStorage();
       if ((await totalDownloadBytes()) >= quota) return { queued: 0, blocked: "quota" };
+    }
+  }
+
+  if (userId !== null) {
+    const quotaMb = await userQuotaMb(userId, policy);
+    if (quotaMb > 0 && (await userDownloadBytes(userId)) >= quotaMb * 1024 * 1024) {
+      return { queued: 0, blocked: "user_quota" };
     }
   }
 
@@ -175,6 +241,7 @@ export async function queueChapterDownloads(
             chapterName: item.name ?? "",
             chapterNumber: Number.isFinite(Number(item.number)) ? Number(item.number) : 0,
             status: "QUEUED",
+            userId,
           },
         });
         queued += 1;
@@ -186,6 +253,7 @@ export async function queueChapterDownloads(
             pagesDone: 0,
             bytes: 0,
             error: null,
+            ...(userId !== null ? { userId } : {}),
             ...(item.name ? { chapterName: item.name } : {}),
             ...(Number.isFinite(Number(item.number)) ? { chapterNumber: Number(item.number) } : {}),
             ...(isStorableId(item.workId) ? { workId: Number(item.workId) } : {}),
@@ -410,11 +478,17 @@ export async function removeWorkDownloads(workId: number): Promise<number> {
   }
 }
 
-export async function downloadsSnapshot(): Promise<{
+export async function downloadsSnapshot(options?: {
+  viewerId?: number | null;
+  canEditQuotas?: boolean;
+}): Promise<{
   items: DownloadItem[];
   storage: DownloadStorage;
   policy: Policy;
   gate: Gate;
+  users: DownloadUserUsage[];
+  viewerId: number | null;
+  canEditQuotas: boolean;
 }> {
   const dir = tierDir("download");
   await mkdir(dir, { recursive: true }).catch(() => {});
@@ -423,7 +497,10 @@ export async function downloadsSnapshot(): Promise<{
     .findMany({
       orderBy: { updatedAt: "desc" },
       take: 500,
-      include: { work: { select: { title: true, slug: true } } },
+      include: {
+        work: { select: { title: true, slug: true } },
+        user: { select: { username: true } },
+      },
     })
     .catch(() => []);
 
@@ -435,9 +512,42 @@ export async function downloadsSnapshot(): Promise<{
   const policy = await getPolicy();
   const gate = queueGate(policy, fs ? Number(fs.bavail) * Number(fs.bsize) : Infinity);
 
+  const accounts = await prisma.user
+    .findMany({ select: { id: true, username: true, downloadQuotaMb: true } })
+    .catch(() => []);
+  type UsageRow = {
+    userId: number | null;
+    _sum: { bytes: number | null };
+    _count: { _all: number };
+  };
+  const usage = await prisma.chapterDownload
+    .groupBy({ by: ["userId"], _sum: { bytes: true }, _count: { _all: true } })
+    .catch(() => [] as UsageRow[]);
+  const usageById = new Map<number, UsageRow>(
+    usage.filter((u) => u.userId !== null).map((u) => [u.userId as number, u]),
+  );
+
+  const users: DownloadUserUsage[] = accounts
+    .map((account) => {
+      const row = usageById.get(account.id);
+      const quotaMb = effectiveQuotaMb(account.downloadQuotaMb, policy);
+      return {
+        userId: account.id,
+        username: account.username,
+        bytes: row?._sum.bytes ?? 0,
+        chapters: row?._count._all ?? 0,
+        quotaMb,
+        quotaBytes: quotaMb > 0 ? quotaMb * 1024 * 1024 : 0,
+      };
+    })
+    .sort((a, b) => b.bytes - a.bytes);
+
   return {
     policy,
     gate,
+    users,
+    viewerId: options?.viewerId ?? null,
+    canEditQuotas: Boolean(options?.canEditQuotas),
     items: rows.map((r) => ({
       chapterId: r.chapterId,
       workId: r.workId,
@@ -450,6 +560,7 @@ export async function downloadsSnapshot(): Promise<{
       pagesDone: r.pagesDone,
       bytes: r.bytes,
       error: r.error,
+      owner: r.user?.username ?? null,
       updatedAt: r.updatedAt.toISOString(),
     })),
     storage: {

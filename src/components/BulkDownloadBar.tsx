@@ -54,7 +54,7 @@ export default function BulkDownloadBar({
 
     let queued = 0;
     let failed = false;
-    let blocked = false;
+    let blocked: "quota" | "user_quota" | null = null;
 
     for (let i = 0; i < list.length; i += BATCH_SIZE) {
       const block = list.slice(i, i + BATCH_SIZE);
@@ -74,8 +74,8 @@ export default function BulkDownloadBar({
         failed = true;
         break;
       }
-      if (data?.blocked === "quota") {
-        blocked = true;
+      if (data?.blocked === "quota" || data?.blocked === "user_quota") {
+        blocked = data.blocked;
         break;
       }
       const n = Number(data?.queued);
@@ -84,7 +84,8 @@ export default function BulkDownloadBar({
     }
 
     setSending(false);
-    if (blocked) setResult("Cota cheia — libere espaço em Downloads");
+    if (blocked === "user_quota") setResult("Sua cota de espaço acabou");
+    else if (blocked) setResult("Cota cheia — libere espaço em Downloads");
     else if (failed) setResult("Falhou ao enviar");
     else {
       setResult(`${queued} na fila`);

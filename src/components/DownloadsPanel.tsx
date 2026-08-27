@@ -18,7 +18,17 @@ type DownloadItem = {
   pagesDone: number;
   bytes: number;
   error: string | null;
+  owner: string | null;
   updatedAt: string;
+};
+
+type DownloadUser = {
+  userId: number;
+  username: string;
+  bytes: number;
+  chapters: number;
+  quotaMb: number;
+  quotaBytes: number;
 };
 
 type DownloadStorage = {
@@ -42,6 +52,9 @@ type Snapshot = {
   storage: DownloadStorage;
   policy: Policy;
   gate: Gate;
+  users?: DownloadUser[];
+  viewerId?: number | null;
+  canEditQuotas?: boolean;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -99,6 +112,91 @@ function groupByWork(items: DownloadItem[]): Group[] {
   return groups;
 }
 
+function UserUsageRow({
+  user,
+  isViewer,
+  canEdit,
+  onSaved,
+}: {
+  user: DownloadUser;
+  isViewer: boolean;
+  canEdit: boolean;
+  onSaved: () => void;
+}) {
+  const [quotaMb, setQuotaMb] = useState(String(user.quotaMb));
+  const [saving, setSaving] = useState(false);
+
+  const percent =
+    user.quotaBytes > 0 ? Math.max(0, Math.min(100, (user.bytes / user.quotaBytes) * 100)) : 0;
+  const full = user.quotaBytes > 0 && user.bytes >= user.quotaBytes;
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const value = Number(quotaMb);
+      await fetch("/api/download/quota", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: user.userId,
+          quotaMb: Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0,
+        }),
+      });
+      onSaved();
+    } catch {
+      /* the panel refreshes on the next poll */
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <li className="py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 truncate text-sm text-text">
+          {user.username}
+          {isViewer ? " (você)" : ""}
+        </p>
+        {canEdit ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <input
+              type="number"
+              min="0"
+              value={quotaMb}
+              onChange={(e) => setQuotaMb(e.target.value)}
+              aria-label={`Cota de ${user.username} (MB)`}
+              className="w-24 rounded-lg border border-border bg-elevated px-2 py-1 text-xs text-text outline-none focus:border-accent"
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="rounded-lg border border-border px-2 py-1 text-[11px] text-muted hover:text-text disabled:opacity-60"
+            >
+              {saving ? "Salvando…" : "Salvar"}
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-1 flex flex-wrap items-baseline gap-2 text-[11px] tabular-nums text-muted">
+        <span>
+          {bytes(user.bytes)} de {user.quotaBytes ? bytes(user.quotaBytes) : "sem limite"}
+        </span>
+        <span>{user.chapters} capítulo(s)</span>
+      </div>
+
+      <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-elevated">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${full ? "bg-red-400" : "bg-accent"}`}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+    </li>
+  );
+}
+
 export default function DownloadsPanel() {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
@@ -111,6 +209,7 @@ export default function DownloadsPanel() {
   });
 
   const items = data?.items ?? [];
+  const users = data?.users ?? [];
   const storage = data?.storage;
   const gate = data?.gate;
   const usedPercent =
@@ -202,6 +301,23 @@ export default function DownloadsPanel() {
         ) : null}
       </section>
 
+      {users.length > 0 ? (
+        <section className="rounded-xl border border-border bg-surface p-4">
+          <h2 className="text-sm font-medium text-text">Espaço por usuário</h2>
+          <ul className="mt-2 divide-y divide-border">
+            {users.map((user) => (
+              <UserUsageRow
+                key={user.userId}
+                user={user}
+                isViewer={user.userId === data?.viewerId}
+                canEdit={!!data?.canEditQuotas}
+                onSaved={() => mutate()}
+              />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {data?.policy ? (
         <DownloadRules policy={data.policy} onChanged={() => mutate()} />
       ) : null}
@@ -280,6 +396,7 @@ export default function DownloadsPanel() {
                           {item.status === "DONE" ? (
                             <span className="tabular-nums">{bytes(item.bytes)}</span>
                           ) : null}
+                          <span className="text-[11px] text-muted">{item.owner ?? "—"}</span>
                           {item.error ? (
                             <span className="text-red-300">{item.error}</span>
                           ) : null}
