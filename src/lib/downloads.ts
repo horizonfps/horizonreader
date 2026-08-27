@@ -6,6 +6,7 @@ import { mkdir, statfs } from "node:fs/promises";
 
 import { prisma } from "@/lib/db";
 import { deleteDiskImage, getDiskImage, setDiskImage, tierDir } from "@/lib/diskCache";
+import { getPolicy, queueGate, type Gate, type Policy } from "@/lib/downloadPolicy";
 import { chapterPageUrls } from "@/lib/readerPages";
 import { isAllowedImageHost } from "@/lib/scrapers";
 
@@ -43,6 +44,7 @@ export type DownloadStorage = {
   diskTotal: number;
   diskFree: number;
   diskUsed: number;
+  quotaBytes: number;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -92,9 +94,72 @@ function parsePages(raw: string): string[] {
   }
 }
 
+export async function freeBytesOnDownloadDisk(): Promise<number> {
+  const dir = tierDir("download");
+  await mkdir(dir, { recursive: true }).catch(() => {});
+  const fs = await statfs(dir).catch(() => null);
+  return fs ? Number(fs.bavail) * Number(fs.bsize) : Infinity;
+}
+
+async function totalDownloadBytes(): Promise<number> {
+  const rows = await prisma.chapterDownload.findMany({ select: { bytes: true } }).catch(() => []);
+  return rows.reduce((acc, r) => acc + r.bytes, 0);
+}
+
+// Age cleanup first, then quota: drops the oldest finished chapters until the
+// total fits under 90% of the quota.
+export async function enforceStorage(): Promise<{ removed: number; bytesFreed: number }> {
+  let removed = 0;
+  let bytesFreed = 0;
+  try {
+    const policy = await getPolicy();
+
+    if (policy.keepDays > 0) {
+      const cutoff = new Date(Date.now() - policy.keepDays * 86_400_000);
+      const stale = await prisma.chapterDownload
+        .findMany({ where: { status: "DONE", updatedAt: { lt: cutoff } } })
+        .catch(() => []);
+      for (const row of stale) {
+        if (await removeDownload(row.chapterId)) {
+          removed += 1;
+          bytesFreed += row.bytes;
+        }
+      }
+    }
+
+    if (policy.quotaMb > 0) {
+      const quota = policy.quotaMb * 1024 * 1024;
+      let total = await totalDownloadBytes();
+      while (total > quota) {
+        const oldest = await prisma.chapterDownload
+          .findFirst({ where: { status: "DONE" }, orderBy: { updatedAt: "asc" } })
+          .catch(() => null);
+        if (!oldest) break;
+        if (!(await removeDownload(oldest.chapterId))) break;
+        removed += 1;
+        bytesFreed += oldest.bytes;
+        total -= oldest.bytes;
+        if (total <= quota * 0.9) break;
+      }
+    }
+  } catch {
+    /* housekeeping never breaks the caller */
+  }
+  return { removed, bytesFreed };
+}
+
 export async function queueChapterDownloads(
   items: { chapterId: number; mangaId?: number; workId?: number; name?: string; number?: number }[],
-): Promise<number> {
+): Promise<{ queued: number; blocked: "quota" | null }> {
+  const policy = await getPolicy();
+  if (policy.quotaMb > 0) {
+    const quota = policy.quotaMb * 1024 * 1024;
+    if ((await totalDownloadBytes()) >= quota) {
+      await enforceStorage();
+      if ((await totalDownloadBytes()) >= quota) return { queued: 0, blocked: "quota" };
+    }
+  }
+
   let queued = 0;
   for (const item of items) {
     const chapterId = Number(item.chapterId);
@@ -133,7 +198,7 @@ export async function queueChapterDownloads(
     }
   }
   void runQueue();
-  return queued;
+  return { queued, blocked: null };
 }
 
 type PageResult = { bytes: number; ok: boolean };
@@ -242,9 +307,24 @@ async function downloadChapter(chapterId: number): Promise<void> {
       },
     })
     .catch(() => null);
+
+  if (!error) await enforceStorage();
 }
 
 let running = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+const GATE_RETRY_MS = 60_000;
+
+function scheduleRetry(): void {
+  if (retryTimer) return;
+  const timer = setTimeout(() => {
+    retryTimer = null;
+    void runQueue();
+  }, GATE_RETRY_MS);
+  timer.unref?.();
+  retryTimer = timer;
+}
 
 export async function runQueue(): Promise<void> {
   if (running) return;
@@ -259,6 +339,13 @@ export async function runQueue(): Promise<void> {
         })
         .catch(() => null);
       if (!row) return;
+
+      await enforceStorage();
+      // A closed gate leaves the row QUEUED and comes back later.
+      if (!queueGate(await getPolicy(), await freeBytesOnDownloadDisk()).open) {
+        scheduleRetry();
+        return;
+      }
 
       // The row may have been removed between the pick and now.
       const fresh = await prisma.chapterDownload
@@ -326,6 +413,8 @@ export async function removeWorkDownloads(workId: number): Promise<number> {
 export async function downloadsSnapshot(): Promise<{
   items: DownloadItem[];
   storage: DownloadStorage;
+  policy: Policy;
+  gate: Gate;
 }> {
   const dir = tierDir("download");
   await mkdir(dir, { recursive: true }).catch(() => {});
@@ -343,8 +432,12 @@ export async function downloadsSnapshot(): Promise<{
     .catch(() => []);
 
   const fs = await statfs(dir).catch(() => null);
+  const policy = await getPolicy();
+  const gate = queueGate(policy, fs ? Number(fs.bavail) * Number(fs.bsize) : Infinity);
 
   return {
+    policy,
+    gate,
     items: rows.map((r) => ({
       chapterId: r.chapterId,
       workId: r.workId,
@@ -366,6 +459,7 @@ export async function downloadsSnapshot(): Promise<{
       diskTotal: fs ? Number(fs.blocks) * Number(fs.bsize) : 0,
       diskFree: fs ? Number(fs.bavail) * Number(fs.bsize) : 0,
       diskUsed: fs ? (Number(fs.blocks) - Number(fs.bavail)) * Number(fs.bsize) : 0,
+      quotaBytes: policy.quotaMb > 0 ? policy.quotaMb * 1024 * 1024 : 0,
     },
   };
 }

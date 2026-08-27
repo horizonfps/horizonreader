@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import { bytes, pct } from "@/components/info/ui";
+import DownloadRules, { type Policy } from "@/components/DownloadRules";
 
 type DownloadItem = {
   chapterId: number;
@@ -27,9 +28,21 @@ type DownloadStorage = {
   diskTotal: number;
   diskFree: number;
   diskUsed: number;
+  quotaBytes: number;
 };
 
-type Snapshot = { items: DownloadItem[]; storage: DownloadStorage };
+type Gate = {
+  open: boolean;
+  reason: "paused" | "window" | "disk" | null;
+  detail: string | null;
+};
+
+type Snapshot = {
+  items: DownloadItem[];
+  storage: DownloadStorage;
+  policy: Policy;
+  gate: Gate;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -99,8 +112,17 @@ export default function DownloadsPanel() {
 
   const items = data?.items ?? [];
   const storage = data?.storage;
+  const gate = data?.gate;
   const usedPercent =
     storage && storage.diskTotal > 0 ? (storage.diskUsed / storage.diskTotal) * 100 : 0;
+  const quotaBytes = storage?.quotaBytes ?? 0;
+  const quotaFull = quotaBytes > 0 && (storage?.downloadsBytes ?? 0) >= quotaBytes;
+  const gateDetail =
+    gate && !gate.open
+      ? gate.reason === "disk"
+        ? `${gate.detail} (${bytes(storage?.diskFree)} livres)`
+        : gate.detail
+      : null;
 
   async function remove(query: string, busyKey: string, drop: (item: DownloadItem) => boolean) {
     if (busy[busyKey]) return;
@@ -169,7 +191,26 @@ export default function DownloadsPanel() {
           <span>{pct(usedPercent)} em uso</span>
           <span>de {bytes(storage?.diskTotal)}</span>
         </div>
+
+        {quotaBytes > 0 ? (
+          <p
+            className={`mt-2 text-[11px] tabular-nums ${quotaFull ? "text-red-300" : "text-muted"}`}
+          >
+            {quotaFull ? "Cota cheia" : "Cota"}: {bytes(storage?.downloadsBytes)} de{" "}
+            {bytes(quotaBytes)}
+          </p>
+        ) : null}
       </section>
+
+      {data?.policy ? (
+        <DownloadRules policy={data.policy} onChanged={() => mutate()} />
+      ) : null}
+
+      {gateDetail ? (
+        <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">
+          {gateDetail}
+        </div>
+      ) : null}
 
       {isLoading && !data ? (
         <div className="space-y-2">

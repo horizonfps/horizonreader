@@ -30,6 +30,7 @@ export default function DownloadButton({
   const [status, setStatus] = useState<DownloadStatus | null>(initialStatus);
   const [queued, setQueued] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [quotaFull, setQuotaFull] = useState(false);
 
   async function send(e: React.MouseEvent) {
     // The chapter row is a link; the button must not navigate.
@@ -43,24 +44,35 @@ export default function DownloadButton({
       body: JSON.stringify({ workId, mangaId, chapters }),
     }).catch(() => null);
     if (res?.ok) {
-      const data = (await res.json().catch(() => null)) as { queued?: number } | null;
-      setQueued(Number.isFinite(Number(data?.queued)) ? Number(data?.queued) : chapters.length);
-      setStatus("QUEUED");
+      const data = (await res.json().catch(() => null)) as {
+        queued?: number;
+        blocked?: string | null;
+      } | null;
+      if (data?.blocked === "quota") {
+        setQuotaFull(true);
+      } else {
+        setQuotaFull(false);
+        setQueued(Number.isFinite(Number(data?.queued)) ? Number(data?.queued) : chapters.length);
+        setStatus("QUEUED");
+      }
     }
     setBusy(false);
   }
 
   const sent = queued !== null;
   const done = status === "DONE";
-  const disabled = busy || done || sent || status === "QUEUED" || status === "RUNNING";
+  const disabled =
+    busy || (!quotaFull && (done || sent || status === "QUEUED" || status === "RUNNING"));
 
-  const text = label
-    ? sent
-      ? `Na fila (${queued})`
-      : label
-    : status
-      ? LABELS[status]
-      : "Baixar";
+  const text = quotaFull
+    ? "Cota cheia"
+    : label
+      ? sent
+        ? `Na fila (${queued})`
+        : label
+      : status
+        ? LABELS[status]
+        : "Baixar";
 
   const Icon = done ? Check : Download;
 

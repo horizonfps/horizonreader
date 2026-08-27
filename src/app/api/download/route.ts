@@ -67,8 +67,8 @@ export async function POST(req: NextRequest) {
   const items = parseItems(body);
   if (items.length === 0) return NextResponse.json({ error: "no_ids" }, { status: 400 });
 
-  const queued = await queueChapterDownloads(items);
-  return NextResponse.json({ ok: true, queued });
+  const { queued, blocked } = await queueChapterDownloads(items);
+  return NextResponse.json({ ok: true, queued, blocked });
 }
 
 export async function GET() {
