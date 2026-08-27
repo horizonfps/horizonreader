@@ -2,7 +2,7 @@
 // chapters the user saved into the device and the fallback page that answers
 // every navigation when the server is unreachable.
 // Bump VERSION to force old clients onto a fresh image cache.
-const VERSION = "v2";
+const VERSION = "v3";
 const IMG_CACHE = `hr-img-${VERSION}`;
 const OFFLINE_CACHE = "hr-offline-v1"; // user-saved content, never version-pruned
 const INDEX_URL = "/__offline/index.json";
@@ -51,6 +51,8 @@ const OFFLINE_HTML = `<!doctype html>
              padding: 0.6rem 0.9rem; }
   .backbar button { background: rgba(255,255,255,0.15); }
   .spacer { height: 3rem; }
+  .autosave { display: flex; align-items: center; gap: 0.5rem; margin: 0.9rem 0 0;
+              font-size: 0.8rem; color: #d4d4d4; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -59,8 +61,10 @@ const OFFLINE_HTML = `<!doctype html>
 (function () {
   var OFFLINE_CACHE = "hr-offline-v1";
   var INDEX_URL = "/__offline/index.json";
+  var QUEUE_URL = "/__offline/progress.json";
   var app = document.getElementById("app");
   var objectUrls = [];
+  var onlineHooked = false;
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -95,6 +99,97 @@ const OFFLINE_HTML = `<!doctype html>
       INDEX_URL,
       new Response(JSON.stringify(list), { headers: { "content-type": "application/json" } })
     );
+  }
+
+  function readQueue(cache) {
+    return cache.match(QUEUE_URL).then(function (res) {
+      return res ? res.json() : [];
+    }).then(function (list) {
+      return Array.isArray(list) ? list : [];
+    }).catch(function () {
+      return [];
+    });
+  }
+
+  function writeQueue(cache, list) {
+    return cache.put(
+      QUEUE_URL,
+      new Response(JSON.stringify(list), { headers: { "content-type": "application/json" } })
+    );
+  }
+
+  // Reading done here has no server to talk to; park it until the network is back.
+  async function recordProgress(item, lastPageRead, read) {
+    if (!item || typeof item.mangaId !== "number") return;
+    var entry = {
+      chapterId: item.chapterId,
+      mangaId: item.mangaId,
+      workId: item.workId === undefined || item.workId === null ? null : item.workId,
+      chapterNumber:
+        item.chapterNumber === undefined || item.chapterNumber === null ? null : item.chapterNumber,
+      lastPageRead: lastPageRead,
+      read: read,
+      at: Date.now(),
+    };
+    try {
+      var cache = await openCache();
+      var list = await readQueue(cache);
+      var previous = null;
+      var rest = [];
+      list.forEach(function (old) {
+        if (old && old.chapterId === entry.chapterId && !previous) previous = old;
+        else if (old) rest.push(old);
+      });
+      var keepsOld =
+        previous && !entry.read && entry.lastPageRead < (previous.lastPageRead || 0);
+      rest.push(keepsOld ? previous : entry);
+      await writeQueue(cache, rest);
+    } catch (err) { /* a queue we cannot write must not break the reader */ }
+  }
+
+  async function flushQueue() {
+    if (!navigator.onLine) return;
+    var cache;
+    var list;
+    try {
+      cache = await openCache();
+      list = await readQueue(cache);
+    } catch (err) {
+      return;
+    }
+    if (!list.length) return;
+
+    var left = [];
+    var stopped = false;
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (stopped || !item || typeof item.chapterId !== "number") {
+        if (item) left.push(item);
+        continue;
+      }
+      try {
+        var res = await fetch("/api/progress", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mangaId: item.mangaId,
+            chapterId: item.chapterId,
+            workId: item.workId === undefined ? null : item.workId,
+            chapterNumber: item.chapterNumber === undefined ? null : item.chapterNumber,
+            lastPageRead: item.lastPageRead,
+            read: item.read,
+          }),
+        });
+        if (!res.ok && res.status !== 401) left.push(item);
+      } catch (err) {
+        stopped = true;
+        left.push(item);
+      }
+    }
+    try {
+      await writeQueue(cache, left);
+    } catch (err) { /* ignore */ }
   }
 
   function releaseObjectUrls() {
@@ -174,6 +269,9 @@ const OFFLINE_HTML = `<!doctype html>
       chapterName: data.chapterName,
       workTitle: data.workTitle,
       workSlug: data.workSlug,
+      mangaId: data.mangaId,
+      workId: data.workId,
+      chapterNumber: data.chapterNumber,
       urls: urls,
       savedAt: Date.now(),
     });
@@ -184,11 +282,39 @@ const OFFLINE_HTML = `<!doctype html>
   async function openReader(item) {
     releaseObjectUrls();
     app.textContent = "";
+    var maxSeen = 0;
+    var ticking = false;
+    var total = (item.urls || []).length;
+
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () {
+        ticking = false;
+        var imgs = wrap.getElementsByTagName("img");
+        var middle = window.innerHeight / 2;
+        var idx = -1;
+        for (var i = 0; i < imgs.length; i++) {
+          if (imgs[i].getBoundingClientRect().top <= middle) idx = i;
+        }
+        if (idx > maxSeen) maxSeen = idx;
+      });
+    }
+
+    var finished = false;
+    function finish() {
+      if (finished) return Promise.resolve();
+      finished = true;
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("pagehide", finish);
+      return recordProgress(item, maxSeen, maxSeen >= total - 1);
+    }
+
     var bar = el("div", "backbar");
     var back = el("button", null, "‹ voltar");
     back.addEventListener("click", function () {
       releaseObjectUrls();
-      render();
+      Promise.resolve(finish()).then(render, render);
     });
     bar.appendChild(back);
     var wrap = el("div", "reader");
@@ -215,6 +341,10 @@ const OFFLINE_HTML = `<!doctype html>
       img.alt = "";
       wrap.appendChild(img);
     }
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pagehide", finish);
+    onScroll();
   }
 
   function chapterCard(item, onRead, onDelete) {
@@ -273,12 +403,37 @@ const OFFLINE_HTML = `<!doctype html>
     app.appendChild(ul);
   }
 
+  function autoSaveLine() {
+    var label = el("label", "autosave");
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    try {
+      box.checked = localStorage.getItem("offline:autosave") === "1";
+    } catch (err) {
+      box.checked = false;
+    }
+    box.addEventListener("change", function () {
+      try {
+        localStorage.setItem("offline:autosave", box.checked ? "1" : "0");
+      } catch (err) { /* private mode just loses the preference */ }
+    });
+    label.appendChild(box);
+    label.appendChild(el("span", null, "Salvar no celular automaticamente"));
+    return label;
+  }
+
   async function render() {
     app.textContent = "";
     app.appendChild(el("h1", null, "Salvos no aparelho"));
     var sub = el("p", "sub", "");
     app.appendChild(sub);
     usageLine(sub);
+    app.appendChild(autoSaveLine());
+
+    if (!onlineHooked) {
+      onlineHooked = true;
+      window.addEventListener("online", flushQueue);
+    }
 
     var cache = await openCache();
     var list = await readIndex(cache);
@@ -303,6 +458,7 @@ const OFFLINE_HTML = `<!doctype html>
       app.appendChild(ul);
     }
 
+    await flushQueue();
     renderServerSection(items.map(function (item) { return item.chapterId; }));
   }
 

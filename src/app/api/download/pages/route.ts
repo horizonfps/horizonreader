@@ -44,6 +44,9 @@ export async function GET(req: NextRequest) {
     chapterName: row.chapterName,
     workTitle: row.work?.title ?? null,
     workSlug: row.work?.slug ?? null,
+    mangaId: row.mangaId,
+    workId: row.workId,
+    chapterNumber: row.chapterNumber,
     urls,
   });
 }
