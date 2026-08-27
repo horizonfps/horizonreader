@@ -1,40 +1,21 @@
 import { Suspense } from "react";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { BookOpen, Check } from "lucide-react";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { getWorkWithLinks, resolveSourcesForWork, waitForLinks } from "@/lib/backbone/resolve";
-import {
-  getCachedChapters,
-  setCachedChapters,
-  bustChapters,
-  loadChaptersForLink,
-  revalidateChapters,
-} from "@/lib/chapterCache";
-import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
-import { findChapterMatch } from "@/lib/chapterMatch";
-import { pickResumeChapter, formatChapterNumber, type ResumeKind } from "@/lib/continueReading";
+import { getCachedChapters, loadChaptersForLink, revalidateChapters } from "@/lib/chapterCache";
+import { buildSourceView } from "@/lib/workChapters";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
-import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
-import BulkDownloadBar from "@/components/BulkDownloadBar";
-import UndoAutoReadButton from "@/components/UndoAutoReadButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
-import PrefetchLink from "@/components/PrefetchLink";
+import ChapterBrowser from "@/components/ChapterBrowser";
 import ResolvingSources from "@/components/ResolvingSources";
 
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 86_400_000;
-const RESUME_PREFIX: Record<ResumeKind, string> = {
-  start: "Começar a ler",
-  resume: "Continuar",
-  next: "Continuar",
-  reread: "Reler último",
-};
 // How long a first-time source resolve may block the request before the page
 // paints; the resolve keeps running in the background past this budget.
 const RESOLVE_BUDGET_MS = 3_500;
@@ -54,29 +35,18 @@ function parseGenres(json?: string | null): string[] {
   }
 }
 
-// Suwayomi uploadDate is epoch millis as a string; fall back to Date.parse.
-function fmtDate(s?: string | null): string {
-  if (!s) return "";
-  const n = Number(s);
-  const t = Number.isFinite(n) && n > 0 ? n : Date.parse(s);
-  if (!Number.isFinite(t) || !t) return "";
-  return new Date(t).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function healthColor(score?: number | null): string {
-  const v = score ?? 0;
-  if (v >= 55) return "bg-green-500";
-  if (v >= 30) return "bg-orange-500";
-  return "bg-red-500";
-}
-
+// Which chapters a link owns, read locally only: picking the source by progress
+// must never wait on a source that is slow or down.
 async function chapterIdsForLink(link: {
   id: number;
   kind?: string | null;
   sourceId?: string | null;
   sourceMangaId: number;
 }): Promise<Set<number>> {
-  const chapters = await loadChaptersForLink(link);
+  const hit = await getCachedChapters<{ id: number }[]>(link).catch(() => null);
+  if (hit) return new Set(hit.data.map((chapter) => chapter.id));
+  if (link.kind !== "scraper") return new Set<number>();
+  const chapters = await loadChaptersForLink(link).catch(() => []);
   return new Set(chapters.map((chapter) => chapter.id));
 }
 
@@ -212,10 +182,10 @@ async function SourcesAndChapters({
   // Force a re-resolve, then strip the param (redirect throws; keep it unwrapped).
   if (refresh) {
     await resolveSourcesForWork(workId, { force: true });
-    const freshLinks = await prisma.sourceLink
-      .findMany({ where: { workId }, select: { id: true, kind: true, sourceMangaId: true } })
-      .catch(() => []);
-    await bustChapters(freshLinks);
+    // Refresh the saved lists in the background instead of dropping them: the
+    // page must come back filled, not empty waiting on every source again.
+    const freshLinks = await prisma.sourceLink.findMany({ where: { workId } }).catch(() => []);
+    for (const link of freshLinks) revalidateChapters(link);
     redirect(`/work/${slug}${src ? `?src=${src}` : ""}`);
   }
 
@@ -278,18 +248,12 @@ async function SourcesAndChapters({
       }
     }
   }
-  // Downloads of the whole work, not just the open source: a chapter downloaded
-  // through source A is reused when the same number is opened on source B.
+  // Used only to rank sources by how much of the work is already on disk; the
+  // per-chapter download state comes with the source view.
   const workDownloads = await prisma.chapterDownload
-    .findMany({
-      where: { workId },
-      select: { chapterId: true, chapterNumber: true, mangaId: true, status: true },
-    })
+    .findMany({ where: { workId, status: "DONE" }, select: { mangaId: true, status: true } })
     .catch(() => []);
 
-  const downloadStatusByChapter = new Map<number, DownloadStatus>(
-    workDownloads.map((row) => [row.chapterId, row.status as DownloadStatus]),
-  );
   const doneByMangaId = new Map<number, number>();
   for (const row of workDownloads) {
     if (row.status !== "DONE") continue;
@@ -311,63 +275,6 @@ async function SourcesAndChapters({
   const selected =
     explicitLink ?? selectedFromProgress ?? mostDownloadedLink ?? links[0] ?? null;
 
-  // Read without a single page turned: the shape markSkippedAsRead leaves behind.
-  const autoReadCount = uid
-    ? await prisma.progress
-        .count({
-          where: {
-            userId: uid,
-            read: true,
-            lastPageRead: 0,
-            OR: [{ workId }, { mangaId: selected?.sourceMangaId ?? -1 }],
-          },
-        })
-        .catch(() => 0)
-    : 0;
-
-  type ChapterView = {
-    id: number;
-    name: string;
-    chapterNumber: number;
-    scanlator?: string | null;
-    uploadDate?: string | null;
-  };
-  let chapters: ChapterView[] = [];
-  if (selected) {
-    const hit = await getCachedChapters<ChapterView[]>(selected);
-    if (hit) {
-      chapters = hit.data;
-      if (hit.stale) revalidateChapters(selected);
-    } else {
-      chapters = (await loadChaptersForLink(selected)) as ChapterView[];
-      if (chapters.length) await setCachedChapters(selected, chapters);
-    }
-  }
-
-  // Chapters already on disk, from any source of this work: the pool the open
-  // source's rows are matched against by number, name and upload date.
-  const doneIds = new Set(
-    workDownloads.filter((row) => row.status === "DONE").map((row) => row.chapterId),
-  );
-  const scanLinks = links
-    .filter((link) => (doneByMangaId.get(link.sourceMangaId) ?? 0) > 0)
-    .slice(0, 4);
-  const scanned = await Promise.all(
-    scanLinks.map(async (link) => {
-      if (selected && link.id === selected.id) return chapters;
-      const hit = await getCachedChapters<ChapterView[]>(link);
-      if (hit) return hit.data;
-      const list = (await loadChaptersForLink(link)) as ChapterView[];
-      if (list.length) await setCachedChapters(link, list);
-      return list;
-    }),
-  );
-  const downloadedElsewhere = scanned.flat().filter((c) => doneIds.has(c.id));
-
-  // Split the source's chapters by scanlator so a single scan group reads clean.
-  // ?scan picks a group; else the largest. dedupeByNumber drops re-uploads so
-  // the list (and the reader's next/prev) never repeats a number.
-  const groups = selected ? groupByScanlator(chapters) : [];
   let wantScan: string | null = null;
   if (scan != null) {
     try {
@@ -376,47 +283,9 @@ async function SourcesAndChapters({
       wantScan = scan;
     }
   }
-  const activeGroup =
-    (wantScan != null ? groups.find((g) => g.key === wantScan) : undefined) ?? groups[0];
-  const visible: ChapterView[] = activeGroup
-    ? dedupeByNumber(activeGroup.chapters).sort((a, b) => b.chapterNumber - a.chapterNumber)
-    : [];
 
-  const visibleChapterIds = new Set(visible.map((chapter) => chapter.id));
-
-  const progressList =
-    uid && selected
-      ? (
-          await prisma.progress
-            .findMany({ where: { userId: uid, mangaId: selected.sourceMangaId } })
-            .catch(() => [])
-        ).filter((progress) => visibleChapterIds.has(progress.chapterId))
-      : [];
-
-  const readSet = new Set(progressList.filter((p) => p.read).map((p) => p.chapterId));
-
-  // Reading entry point: the furthest point reached, never a skipped chapter.
-  const chaptersAsc = [...visible].reverse();
-  const resume = pickResumeChapter(chaptersAsc, progressList);
-  const resumeOwnStatus = resume ? downloadStatusByChapter.get(resume.chapterId) ?? null : null;
-  const resumeChapter = resume ? chaptersAsc.find((c) => c.id === resume.chapterId) ?? null : null;
-  const resumeMirroredId =
-    resumeChapter && resumeOwnStatus !== "DONE"
-      ? findChapterMatch(resumeChapter, downloadedElsewhere)?.id ?? null
-      : null;
-  const startId = resumeMirroredId ?? resume?.chapterId ?? null;
-  const startLabel = resume
-    ? `${RESUME_PREFIX[resume.kind]} · Cap. ${formatChapterNumber(resume.chapterNumber)}`
-    : "";
-
-  // Shortcut payload: the resume target plus the four chapters after it.
-  const resumeIndex = resume ? chaptersAsc.findIndex((c) => c.id === resume.chapterId) : -1;
-  const nextChapters =
-    resumeIndex >= 0
-      ? chaptersAsc
-          .slice(resumeIndex, resumeIndex + 5)
-          .map((c) => ({ chapterId: c.id, name: c.name, number: c.chapterNumber }))
-      : [];
+  // null means the source has not answered yet; ChapterBrowser polls for it.
+  const view = selected ? await buildSourceView(selected, { uid }) : null;
 
   return (
     <div className="space-y-6">
@@ -426,152 +295,22 @@ async function SourcesAndChapters({
           <RefreshSourcesButton workId={work?.id ?? workId} />
         </div>
         {links.length > 0 ? (
-          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
-            {links.map((link) => {
-              const active = selected?.id === link.id;
-              return (
-                <PrefetchLink
-                  key={link.id}
-                  href={`/work/${slug}?src=${link.id}`}
-                  scroll={false}
-                  className={`flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs ${
-                    active ? "bg-accent text-on-accent" : "bg-elevated text-text"
-                  }`}
-                >
-                  <span className={`h-1.5 w-1.5 rounded-full ${healthColor(link.healthScore)}`} />
-                  <span className="max-w-[10rem] truncate">{link.sourceName || "Fonte"}</span>
-                  <span className={active ? "text-on-accent" : "text-muted"}>{link.chapterCount}</span>
-                </PrefetchLink>
-              );
-            })}
-          </div>
+          <ChapterBrowser
+            slug={slug}
+            workId={workId}
+            sources={links.map((l) => ({
+              id: l.id,
+              sourceName: l.sourceName || "Fonte",
+              chapterCount: l.chapterCount,
+              healthScore: l.healthScore,
+              lang: l.lang,
+            }))}
+            initialSourceId={selected?.id ?? null}
+            initialScan={wantScan}
+            initialView={view}
+          />
         ) : (
           <ResolvingSources />
-        )}
-      </section>
-
-      {groups.length > 1 && selected ? (
-        <section>
-          <h2 className="mb-2 text-sm text-muted">Grupos de scan</h2>
-          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
-            {groups.map((g) => {
-              const active = activeGroup?.key === g.key;
-              return (
-                <Link
-                  key={g.key || "—"}
-                  href={`/work/${slug}?src=${selected.id}&scan=${encodeURIComponent(g.key)}`}
-                  scroll={false}
-                  className={`flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs ${
-                    active ? "bg-accent text-on-accent" : "bg-elevated text-text"
-                  }`}
-                >
-                  <span className="max-w-[10rem] truncate">{g.key || "Sem grupo"}</span>
-                  <span className={active ? "text-on-accent" : "text-muted"}>{g.count}</span>
-                </Link>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      <section>
-        <h2 className="mb-2 text-sm text-muted">
-          Capítulos{visible.length ? ` (${visible.length})` : ""}
-        </h2>
-
-        {startId ? (
-          <div className="mb-3 flex gap-2">
-            <Link
-              href={`/reader/${startId}`}
-              className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-hover"
-            >
-              <BookOpen className="h-4 w-4" />
-              {startLabel}
-            </Link>
-            {selected && nextChapters.length > 0 ? (
-              <DownloadButton
-                label="Baixar 5 próximos"
-                chapters={nextChapters}
-                mangaId={selected.sourceMangaId}
-                workId={workId}
-              />
-            ) : null}
-          </div>
-        ) : null}
-
-        {autoReadCount > 0 ? (
-          <div className="mb-3">
-            <UndoAutoReadButton
-              workId={workId}
-              mangaId={selected?.sourceMangaId ?? 0}
-              count={autoReadCount}
-            />
-          </div>
-        ) : null}
-
-        {selected && visible.length > 0 ? (
-          <BulkDownloadBar
-            chapters={chaptersAsc.map((c) => ({
-              chapterId: c.id,
-              name: c.name,
-              number: c.chapterNumber,
-            }))}
-            mangaId={selected.sourceMangaId}
-            workId={workId}
-          />
-        ) : null}
-
-        {visible.length === 0 ? (
-          <p className="text-sm text-muted">
-            {selected
-              ? links.length > 1
-                ? "Esta fonte não tem capítulos. Tente outra fonte acima."
-                : "Esta fonte ainda não tem capítulos."
-              : "Selecione uma fonte para ver os capítulos."}
-          </p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {visible.map((c) => {
-              const read = readSet.has(c.id);
-              const sub = fmtDate(c.uploadDate);
-              const ownStatus = downloadStatusByChapter.get(c.id) ?? null;
-              const mirrored =
-                ownStatus === "DONE" ? null : findChapterMatch(c, downloadedElsewhere);
-              const mirroredId = mirrored?.id ?? null;
-              const status = ownStatus ?? (mirroredId ? "DONE" : null);
-              return (
-                <li key={c.id} className="flex items-center gap-2">
-                  <Link
-                    href={`/reader/${mirroredId ?? c.id}`}
-                    className="flex min-w-0 flex-1 items-center gap-3 py-2.5"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className={`truncate text-sm ${read ? "text-muted" : "text-text"}`}>{c.name}</p>
-                      {sub || mirroredId ? (
-                        <div className="flex items-center gap-1.5">
-                          {sub ? <p className="truncate text-xs text-muted">{sub}</p> : null}
-                          {mirroredId ? (
-                            <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">
-                              Baixado em outra fonte
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                    {read ? <Check className="h-4 w-4 shrink-0 text-muted" /> : null}
-                  </Link>
-                  {selected ? (
-                    <DownloadButton
-                      chapters={[{ chapterId: c.id, name: c.name, number: c.chapterNumber }]}
-                      mangaId={selected.sourceMangaId}
-                      workId={workId}
-                      initialStatus={status}
-                    />
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
         )}
       </section>
     </div>
