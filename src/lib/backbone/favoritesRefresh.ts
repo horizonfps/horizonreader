@@ -2,8 +2,8 @@
 // for favorited/recently-read works, ahead of the reader opening them.
 
 import { prisma } from "@/lib/db";
-import { queueSourceResolve, getPrimaryLink } from "@/lib/backbone/resolve";
-import { refreshChapters } from "@/lib/chapterCache";
+import { queueSourceResolve } from "@/lib/backbone/resolve";
+import { warmWorkChapters } from "@/lib/chapterWarm";
 
 const raw = (process.env.FAVORITES_REFRESH || "").trim().toLowerCase();
 const ENABLED = raw ? raw === "true" || raw === "1" : process.env.NODE_ENV === "production";
@@ -50,8 +50,7 @@ async function cycle(): Promise<void> {
     for (const workId of workIds) {
       try {
         queueSourceResolve(workId);
-        const link = await getPrimaryLink(workId);
-        if (link) await refreshChapters(link);
+        await warmWorkChapters(workId);
       } catch (e) {
         console.warn(`[favrefresh] work ${workId} failed`, e);
       }

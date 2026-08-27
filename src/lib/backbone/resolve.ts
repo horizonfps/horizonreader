@@ -40,10 +40,16 @@ import {
 import { SCRAPERS } from "@/lib/scrapers";
 import { keyToMangaId, syncNativeChapters } from "@/lib/scrapers/native";
 import { setCachedChapters } from "@/lib/chapterCache";
+import { warmWorkChapters } from "@/lib/chapterWarm";
 
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 
 const DAY_MS = 86_400_000;
+// A work already carrying several usable sources gains almost nothing from a
+// full catalogue sweep, and the sweep is what starves the engine while the
+// reader waits. Look for new sources weekly instead of daily.
+const LIGHT_WINDOW_MS = 7 * DAY_MS;
+const LIGHT_MIN_LINKS = 3;
 const FORCE_COOLDOWN_MS = 120_000;
 const REF_FRESH_MS = 6 * 3_600_000;
 const SOURCE_TIMEOUT = 6_000;
@@ -606,6 +612,19 @@ async function doResolveSourcesForWork(
   );
   if (fresh) return;
 
+  if (!force) {
+    const withChapters = work.links.filter((l) => l.chapterCount > 0);
+    const newest = withChapters.reduce(
+      (max, l) => Math.max(max, l.lastSyncedAt?.getTime() ?? 0),
+      0,
+    );
+    if (withChapters.length >= LIGHT_MIN_LINKS && Date.now() - newest < LIGHT_WINDOW_MS) {
+      console.info(`[resolve] work ${workId}: modo leve (${withChapters.length} fontes)`);
+      void warmWorkChapters(workId);
+      return;
+    }
+  }
+
   const titles = [work.title, ...parseArr(work.altTitles)].filter(Boolean);
   const ref = { origin: work.origin, externalId: work.externalId };
   // Scan sources index Latin titles only, so CJK queries never match; trivial
@@ -683,6 +702,30 @@ async function doResolveSourcesForWork(
       .then(() => promotePrimary(workId))
       .catch(() => {});
   }
+}
+
+// Read-only mirror of the two tests above, for reporting which pass a resolve
+// of this work would run.
+export async function sweepModeForWork(workId: number): Promise<"fresh" | "light" | "sweep"> {
+  let links: { lastSyncedAt: Date | null; chapterCount: number }[];
+  try {
+    links = await prisma.sourceLink.findMany({
+      where: { workId },
+      select: { lastSyncedAt: true, chapterCount: true },
+    });
+  } catch (e) {
+    console.warn(`[resolve] sweepModeForWork failed (work ${workId})`, e);
+    return "sweep";
+  }
+  const withChapters = links.filter((l) => l.chapterCount > 0);
+  const newest = withChapters.reduce(
+    (max, l) => Math.max(max, l.lastSyncedAt?.getTime() ?? 0),
+    0,
+  );
+  const age = Date.now() - newest;
+  if (newest > 0 && age < DAY_MS) return "fresh";
+  if (withChapters.length >= LIGHT_MIN_LINKS && newest > 0 && age < LIGHT_WINDOW_MS) return "light";
+  return "sweep";
 }
 
 async function runScraper(
