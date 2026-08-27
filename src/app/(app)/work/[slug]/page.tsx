@@ -19,6 +19,7 @@ import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
+import BulkDownloadBar from "@/components/BulkDownloadBar";
 import HorizonPickButton from "@/components/HorizonPickButton";
 import PrefetchLink from "@/components/PrefetchLink";
 import ResolvingSources from "@/components/ResolvingSources";
@@ -435,6 +436,18 @@ async function SourcesAndChapters({
               />
             ) : null}
           </div>
+        ) : null}
+
+        {selected && visible.length > 0 ? (
+          <BulkDownloadBar
+            chapters={chaptersAsc.map((c) => ({
+              chapterId: c.id,
+              name: c.name,
+              number: c.chapterNumber,
+            }))}
+            mangaId={selected.sourceMangaId}
+            workId={workId}
+          />
         ) : null}
 
         {visible.length === 0 ? (
