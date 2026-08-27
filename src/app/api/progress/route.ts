@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
+import { markSkippedAsRead } from "@/lib/skippedChapters";
 
 export const runtime = "nodejs";
 
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
       ? body.chapterNumber
       : null;
 
+  let autoRead = 0;
   const extra: { workId?: number; chapterNumber?: number } = {};
   if (workId != null) extra.workId = workId;
   if (chapterNumber != null) extra.chapterNumber = chapterNumber;
@@ -80,9 +82,19 @@ export async function POST(req: NextRequest) {
           .catch(() => {});
       }
     }
+
+    if (read) {
+      autoRead = await markSkippedAsRead({
+        userId: session.uid,
+        mangaId,
+        chapterId,
+        workId,
+        chapterNumber,
+      });
+    }
   } catch {
     return NextResponse.json({ ok: false }, { status: 200 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, autoRead });
 }
