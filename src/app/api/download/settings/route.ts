@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
-import { downloadsSnapshot, enforceStorage, runQueue } from "@/lib/downloads";
+import {
+  downloadsSnapshot,
+  enforceStorage,
+  enforceUserQuotas,
+  runQueue,
+} from "@/lib/downloads";
 import { savePolicy, type Policy } from "@/lib/downloadPolicy";
 
 export const runtime = "nodejs";
@@ -48,6 +53,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "bad_action" }, { status: 400 });
   }
 
-  const { removed, bytesFreed } = await enforceStorage();
-  return NextResponse.json({ ok: true, removed, bytesFreed });
+  const global = await enforceStorage();
+  const perUser = await enforceUserQuotas();
+  return NextResponse.json({
+    ok: true,
+    removed: global.removed + perUser.removed,
+    bytesFreed: global.bytesFreed + perUser.bytesFreed,
+  });
 }

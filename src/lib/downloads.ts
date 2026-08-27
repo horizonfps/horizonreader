@@ -207,7 +207,19 @@ export async function enforceStorage(): Promise<{ removed: number; bytesFreed: n
         if (total <= quota * 0.9) break;
       }
     }
+  } catch {
+    /* housekeeping never breaks the caller */
+  }
+  return { removed, bytesFreed };
+}
 
+// Per-user quota only blocks new downloads; freeing space for an account that
+// went over is an explicit admin action, never automatic.
+export async function enforceUserQuotas(): Promise<{ removed: number; bytesFreed: number }> {
+  let removed = 0;
+  let bytesFreed = 0;
+  try {
+    const policy = await getPolicy();
     const perUser = await prisma.chapterDownload
       .groupBy({ by: ["userId"], _sum: { bytes: true } })
       .catch(() => [] as { userId: number | null; _sum: { bytes: number | null } }[]);

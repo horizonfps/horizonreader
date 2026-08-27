@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { enforceStorage, isStorableId } from "@/lib/downloads";
+import { isStorableId } from "@/lib/downloads";
 
 export const runtime = "nodejs";
 
@@ -28,6 +28,5 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "bad_ids" }, { status: 400 });
   }
 
-  void enforceStorage();
   return NextResponse.json({ ok: true, userId, quotaMb });
 }
