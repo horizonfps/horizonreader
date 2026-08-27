@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import SaveOfflineButton from "@/components/SaveOfflineButton";
+import { flushProgress, queueProgress, type PendingProgress } from "@/lib/offlineProgress";
 
 type Mode = "vertical" | "paged";
 type Dir = "ltr" | "rtl";
@@ -217,6 +218,19 @@ export default function Reader({
   const saveProgress = useCallback(
     (p: number, opts?: { beacon?: boolean }) => {
       const read = p >= total - 1;
+      const pending = (): PendingProgress => ({
+        chapterId,
+        mangaId,
+        workId: workId ?? null,
+        chapterNumber: chapterNumber ?? null,
+        lastPageRead: p,
+        read,
+        at: Date.now(),
+      });
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        void queueProgress(pending());
+        return;
+      }
       const payload = JSON.stringify({ mangaId, chapterId, workId, chapterNumber, lastPageRead: p, read });
       if (opts?.beacon && typeof navigator !== "undefined" && navigator.sendBeacon) {
         navigator.sendBeacon("/api/progress", new Blob([payload], { type: "application/json" }));
@@ -227,10 +241,17 @@ export default function Reader({
         headers: { "content-type": "application/json" },
         body: payload,
         keepalive: true,
-      }).catch(() => {});
+      }).catch(() => {
+        void queueProgress(pending());
+      });
     },
     [mangaId, chapterId, workId, chapterNumber, total],
   );
+
+  // Anything read while the network was down still owes the server a save.
+  useEffect(() => {
+    void flushProgress();
+  }, []);
 
   // debounced progress save while reading (only once resume has settled)
   useEffect(() => {
@@ -603,6 +624,9 @@ export default function Reader({
               chapterName={title}
               workTitle={workTitle}
               workSlug={workSlug}
+              mangaId={mangaId}
+              workId={workId}
+              chapterNumber={chapterNumber}
               urls={pageUrls}
             />
             <button

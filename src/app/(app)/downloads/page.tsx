@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/session";
 import DownloadsPanel from "@/components/DownloadsPanel";
+import OfflineAutoSaveToggle from "@/components/OfflineAutoSaveToggle";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export default async function DownloadsPage() {
       <a href="/offline" className="inline-block text-sm text-muted underline">
         Salvos no celular
       </a>
+      <OfflineAutoSaveToggle />
       <DownloadsPanel />
     </div>
   );

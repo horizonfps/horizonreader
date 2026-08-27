@@ -1,52 +1,33 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-
-const OFFLINE_CACHE = "hr-offline-v1";
-const INDEX_URL = "/__offline/index.json";
-
-type OfflineItem = {
-  chapterId: number;
-  chapterName: string;
-  workTitle?: string | null;
-  workSlug?: string | null;
-  urls: string[];
-  savedAt: number;
-};
+import {
+  OFFLINE_CACHE,
+  readOfflineIndex as readIndex,
+  writeOfflineIndex as writeIndex,
+} from "@/lib/offlineProgress";
 
 type Props = {
   chapterId: number;
   chapterName: string;
   workTitle?: string | null;
   workSlug?: string | null;
+  mangaId: number;
+  workId?: number | null;
+  chapterNumber?: number | null;
   urls: string[];
 };
 
 type State = "idle" | "saving" | "saved" | "failed";
-
-async function readIndex(cache: Cache): Promise<OfflineItem[]> {
-  try {
-    const res = await cache.match(INDEX_URL);
-    if (!res) return [];
-    const list = await res.json();
-    return Array.isArray(list) ? (list as OfflineItem[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-async function writeIndex(cache: Cache, list: OfflineItem[]): Promise<void> {
-  await cache.put(
-    INDEX_URL,
-    new Response(JSON.stringify(list), { headers: { "content-type": "application/json" } }),
-  );
-}
 
 export default function SaveOfflineButton({
   chapterId,
   chapterName,
   workTitle,
   workSlug,
+  mangaId,
+  workId,
+  chapterNumber,
   urls,
 }: Props) {
   const [supported, setSupported] = useState(false);
@@ -103,7 +84,17 @@ export default function SaveOfflineButton({
     try {
       const list = await readIndex(cache);
       const rest = list.filter((item) => item?.chapterId !== chapterId);
-      rest.push({ chapterId, chapterName, workTitle, workSlug, urls, savedAt: Date.now() });
+      rest.push({
+        chapterId,
+        chapterName,
+        workTitle,
+        workSlug,
+        mangaId,
+        workId: workId ?? null,
+        chapterNumber: chapterNumber ?? null,
+        urls,
+        savedAt: Date.now(),
+      });
       await writeIndex(cache, rest);
     } catch {
       setState("failed");
@@ -111,7 +102,17 @@ export default function SaveOfflineButton({
     }
 
     setState("saved");
-  }, [state, urls, chapterId, chapterName, workTitle, workSlug]);
+  }, [
+    state,
+    urls,
+    chapterId,
+    chapterName,
+    workTitle,
+    workSlug,
+    mangaId,
+    workId,
+    chapterNumber,
+  ]);
 
   if (!supported) return null;
 
