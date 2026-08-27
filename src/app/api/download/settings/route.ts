@@ -15,6 +15,9 @@ function parsePolicy(body: unknown): Partial<Policy> {
   if (b.windowStart !== undefined) out.windowStart = String(b.windowStart);
   if (b.windowEnd !== undefined) out.windowEnd = String(b.windowEnd);
   if (b.paused !== undefined) out.paused = Boolean(b.paused);
+  if (b.maxKbps !== undefined) out.maxKbps = Number(b.maxKbps);
+  if (b.parallelChapters !== undefined) out.parallelChapters = Number(b.parallelChapters);
+  if (b.parallelPages !== undefined) out.parallelPages = Number(b.parallelPages);
   return out;
 }
 

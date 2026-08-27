@@ -1,5 +1,5 @@
 // Server-side rules the download queue obeys: disk quota, age cleanup, free
-// space floor, allowed hours and a manual pause. One row, id 1.
+// space floor, allowed hours, throttling and a manual pause. One row, id 1.
 
 import { prisma } from "@/lib/db";
 
@@ -11,6 +11,9 @@ export type Policy = {
   windowStart: string;
   windowEnd: string;
   paused: boolean;
+  maxKbps: number;
+  parallelChapters: number;
+  parallelPages: number;
 };
 
 export type Gate = {
@@ -27,6 +30,9 @@ export const DEFAULT_POLICY: Policy = {
   windowStart: "",
   windowEnd: "",
   paused: false,
+  maxKbps: 0,
+  parallelChapters: 1,
+  parallelPages: 4,
 };
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -36,6 +42,11 @@ function intOr(value: unknown, fallback: number): number {
   if (!Number.isFinite(n)) return fallback;
   const i = Math.floor(n);
   return i >= 0 ? i : fallback;
+}
+
+// Out-of-range values clamp to the edge instead of being rejected.
+function clamped(value: unknown, fallback: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, intOr(value, fallback)));
 }
 
 function timeOf(value: unknown): string {
@@ -54,6 +65,9 @@ export async function getPolicy(): Promise<Policy> {
       windowStart: row.windowStart,
       windowEnd: row.windowEnd,
       paused: row.paused,
+      maxKbps: row.maxKbps,
+      parallelChapters: row.parallelChapters,
+      parallelPages: row.parallelPages,
     };
   } catch {
     return DEFAULT_POLICY;
@@ -75,6 +89,15 @@ export async function savePolicy(input: Partial<Policy>): Promise<Policy> {
     windowStart: input.windowStart === undefined ? current.windowStart : timeOf(input.windowStart),
     windowEnd: input.windowEnd === undefined ? current.windowEnd : timeOf(input.windowEnd),
     paused: input.paused === undefined ? current.paused : Boolean(input.paused),
+    maxKbps: input.maxKbps === undefined ? current.maxKbps : intOr(input.maxKbps, current.maxKbps),
+    parallelChapters:
+      input.parallelChapters === undefined
+        ? current.parallelChapters
+        : clamped(input.parallelChapters, current.parallelChapters, 1, 4),
+    parallelPages:
+      input.parallelPages === undefined
+        ? current.parallelPages
+        : clamped(input.parallelPages, current.parallelPages, 1, 8),
   };
 
   try {

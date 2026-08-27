@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import useSWR from "swr";
-import { bytes, pct } from "@/components/info/ui";
+import { bytes, pct, rate } from "@/components/info/ui";
 import DownloadRules, { type Policy } from "@/components/DownloadRules";
 
 type DownloadItem = {
@@ -55,6 +55,7 @@ type Snapshot = {
   users?: DownloadUser[];
   viewerId?: number | null;
   canEditQuotas?: boolean;
+  speedBps: number;
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -289,6 +290,7 @@ export default function DownloadsPanel() {
           <span>{bytes(storage?.diskFree)} livres</span>
           <span>{pct(usedPercent)} em uso</span>
           <span>de {bytes(storage?.diskTotal)}</span>
+          <span>Velocidade agora {rate(data?.speedBps)}</span>
         </div>
 
         {quotaBytes > 0 ? (

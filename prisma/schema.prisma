@@ -209,7 +209,12 @@ model DownloadPolicy {
   windowStart    String   @default("") // "HH:MM"; empty = any hour
   windowEnd      String   @default("")
   paused         Boolean  @default(false)
-  updatedAt      DateTime @updatedAt
+
+  maxKbps          Int @default(0) // 0 = no speed limit
+  parallelChapters Int @default(1)
+  parallelPages    Int @default(4)
+
+  updatedAt DateTime @updatedAt
 }
 
 // Append-only reading events for the profile timeline + xlsx export.

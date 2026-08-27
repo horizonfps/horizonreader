@@ -11,6 +11,9 @@ export type Policy = {
   windowStart: string;
   windowEnd: string;
   paused: boolean;
+  maxKbps: number;
+  parallelChapters: number;
+  parallelPages: number;
 };
 
 const FIELD =
@@ -32,6 +35,9 @@ export default function DownloadRules({
   const [perUserQuotaMb, setPerUserQuotaMb] = useState(String(policy.perUserQuotaMb ?? 0));
   const [keepDays, setKeepDays] = useState(String(policy.keepDays));
   const [minFreeGb, setMinFreeGb] = useState(String(policy.minFreeGb));
+  const [maxKbps, setMaxKbps] = useState(String(policy.maxKbps ?? 0));
+  const [parallelChapters, setParallelChapters] = useState(String(policy.parallelChapters ?? 1));
+  const [parallelPages, setParallelPages] = useState(String(policy.parallelPages ?? 4));
   const [windowStart, setWindowStart] = useState(policy.windowStart);
   const [windowEnd, setWindowEnd] = useState(policy.windowEnd);
   const [paused, setPaused] = useState(policy.paused);
@@ -56,6 +62,9 @@ export default function DownloadRules({
           perUserQuotaMb: numberOf(perUserQuotaMb),
           keepDays: numberOf(keepDays),
           minFreeGb: numberOf(minFreeGb),
+          maxKbps: numberOf(maxKbps),
+          parallelChapters: numberOf(parallelChapters),
+          parallelPages: numberOf(parallelPages),
           windowStart,
           windowEnd,
           paused,
@@ -154,6 +163,44 @@ export default function DownloadRules({
             onChange={(e) => setMinFreeGb(e.target.value)}
             className={`mt-1 ${FIELD}`}
           />
+        </label>
+
+        <label className="block">
+          <span className="text-[11px] text-muted">Velocidade máxima (KB/s)</span>
+          <input
+            type="number"
+            min="0"
+            value={maxKbps}
+            onChange={(e) => setMaxKbps(e.target.value)}
+            className={`mt-1 ${FIELD}`}
+          />
+          <span className="mt-0.5 block text-[11px] text-muted">0 = sem limite</span>
+        </label>
+
+        <label className="block">
+          <span className="text-[11px] text-muted">Capítulos ao mesmo tempo</span>
+          <input
+            type="number"
+            min="1"
+            max="4"
+            value={parallelChapters}
+            onChange={(e) => setParallelChapters(e.target.value)}
+            className={`mt-1 ${FIELD}`}
+          />
+          <span className="mt-0.5 block text-[11px] text-muted">1 a 4</span>
+        </label>
+
+        <label className="block">
+          <span className="text-[11px] text-muted">Páginas ao mesmo tempo</span>
+          <input
+            type="number"
+            min="1"
+            max="8"
+            value={parallelPages}
+            onChange={(e) => setParallelPages(e.target.value)}
+            className={`mt-1 ${FIELD}`}
+          />
+          <span className="mt-0.5 block text-[11px] text-muted">1 a 8</span>
         </label>
 
         <div className="block">
