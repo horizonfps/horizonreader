@@ -54,27 +54,38 @@ function ttlFor(path: string): number {
   return 30 * 60_000;
 }
 
+async function fetchJson<T>(path: string, timeoutMs: number): Promise<T | null> {
+  try {
+    // Gate lives inside the load: a cache hit must never pay the 220ms wait.
+    await schedule();
+    const res = await fetch(`${BASE}${path}`, {
+      headers: HEADERS,
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 async function getJson<T = unknown>(path: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<T | null> {
-  return cachedJson<T>(`mdx:${path}`, ttlFor(path), async () => {
-    try {
-      // Gate lives inside the load: a cache hit must never pay the 220ms wait.
-      await schedule();
-      const res = await fetch(`${BASE}${path}`, {
-        headers: HEADERS,
-        cache: "no-store",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (!res.ok) return null;
-      return (await res.json()) as T;
-    } catch {
-      return null;
-    }
-  });
+  return cachedJson<T>(`mdx:${path}`, ttlFor(path), () => fetchJson<T>(path, timeoutMs));
 }
 
 // Shared entry point so every MangaDex call in the app rides the same throttle.
 export async function mdxJson<T = unknown>(path: string, timeoutMs?: number): Promise<T | null> {
   return getJson<T>(path, timeoutMs);
+}
+
+// Same call with the response cache skipped, for callers that got an answer the
+// cache will keep serving but that they cannot use.
+export async function mdxJsonFresh<T = unknown>(
+  path: string,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<T | null> {
+  return fetchJson<T>(path, timeoutMs);
 }
 
 type MdxManga = {

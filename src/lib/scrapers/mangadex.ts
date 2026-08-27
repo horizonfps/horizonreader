@@ -3,7 +3,7 @@
 // solver, and a work that came from MangaDex links by uuid instead of by title.
 
 import type { Scraper, ScraperChapter, ScraperManga } from "./types";
-import { mdxJson } from "../backbone/mangadex";
+import { mdxJson, mdxJsonFresh } from "../backbone/mangadex";
 import { BLOCKED_MDX_TAGS } from "../backbone/filter";
 
 const TITLE_PREFIX = "https://mangadex.org/title/";
@@ -64,6 +64,20 @@ function parseWhen(a: MdxChapter["attributes"]): number | null {
 }
 
 const atHomeCache = new Map<string, { urls: string[]; at: number }>();
+
+type AtHome = {
+  baseUrl?: string;
+  chapter?: { hash?: string; data?: string[]; dataSaver?: string[] };
+};
+
+function atHomeUrls(d: AtHome | null): string[] {
+  const base = d?.baseUrl;
+  const hash = d?.chapter?.hash;
+  const files = d?.chapter?.data?.length ? d.chapter.data : d?.chapter?.dataSaver;
+  const quality = d?.chapter?.data?.length ? "data" : "data-saver";
+  if (!base || !hash || !files?.length) return [];
+  return files.map((f) => `${base}/${quality}/${hash}/${f}`);
+}
 
 type MadaraLikeConfig = { id: string; name: string; lang: string; apiLangs: string[] };
 
@@ -142,17 +156,14 @@ export function createMangaDex(cfg: MadaraLikeConfig): Scraper {
     const hot = atHomeCache.get(id);
     if (hot && Date.now() - hot.at < AT_HOME_TTL_MS) return hot.urls;
 
-    const d = await mdxJson<{
-      baseUrl?: string;
-      chapter?: { hash?: string; data?: string[]; dataSaver?: string[] };
-    }>(`/at-home/server/${id}`, 15_000);
-    const base = d?.baseUrl;
-    const hash = d?.chapter?.hash;
-    const files = d?.chapter?.data?.length ? d.chapter.data : d?.chapter?.dataSaver;
-    const quality = d?.chapter?.data?.length ? "data" : "data-saver";
-    if (!base || !hash || !files?.length) return [];
+    const path = `/at-home/server/${id}`;
+    let urls = atHomeUrls(await mdxJson<AtHome>(path, 15_000));
+    // An at-home answer carrying no page is cached like any other, and the
+    // reader reads an empty list as a chapter that does not exist. Ask the
+    // source itself once before accepting that.
+    if (!urls.length) urls = atHomeUrls(await mdxJsonFresh<AtHome>(path, 15_000));
+    if (!urls.length) return [];
 
-    const urls = files.map((f) => `${base}/${quality}/${hash}/${f}`);
     atHomeCache.set(id, { urls, at: Date.now() });
     return urls;
   }
