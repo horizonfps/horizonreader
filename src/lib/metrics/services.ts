@@ -2,9 +2,10 @@
 // database and the on-disk caches.
 
 import { existsSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat, statfs } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { prisma } from "@/lib/db";
+import { tierDir } from "@/lib/diskCache";
 import { solverMemorySnapshot } from "@/lib/scrapers/solverMemory";
 import { engineGateSnapshot } from "@/lib/backbone/engineGate";
 import { listExtensions, listSources } from "@/lib/suwayomi";
@@ -340,6 +341,53 @@ async function dirStats(dir: string, maxEntries = 40_000) {
   return { exists: true, files, bytes, truncated };
 }
 
+// statfs needs a path that exists, and the download folder is only created on
+// the first download, so probe the nearest existing ancestor.
+async function diskSpace(dir: string): Promise<{ diskTotal: number; diskFree: number }> {
+  let probe = dir;
+  for (let depth = 0; depth < 8 && !existsSync(probe); depth += 1) {
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  const fs = await statfs(probe).catch(() => null);
+  if (!fs) return { diskTotal: 0, diskFree: 0 };
+  return {
+    diskTotal: Number(fs.blocks) * Number(fs.bsize),
+    diskFree: Number(fs.bavail) * Number(fs.bsize),
+  };
+}
+
+async function appDownloadStats() {
+  const dir = tierDir("download");
+  const [disk, folder, done, queued, running, failed, stored] = await Promise.all([
+    diskSpace(dir),
+    cached("appdownloads", 60_000, () => dirStats(dir)),
+    prisma.chapterDownload.count({ where: { status: "DONE" } }).catch(() => 0),
+    prisma.chapterDownload.count({ where: { status: "QUEUED" } }).catch(() => 0),
+    prisma.chapterDownload.count({ where: { status: "RUNNING" } }).catch(() => 0),
+    prisma.chapterDownload.count({ where: { status: "ERROR" } }).catch(() => 0),
+    prisma.chapterDownload
+      .aggregate({ _sum: { bytes: true } })
+      .then((r) => r._sum.bytes ?? 0)
+      .catch(() => 0),
+  ]);
+
+  return {
+    dir,
+    exists: folder.exists,
+    files: folder.files,
+    bytes: folder.bytes,
+    done,
+    queued,
+    running,
+    failed,
+    storedBytes: stored,
+    diskTotal: disk.diskTotal,
+    diskFree: disk.diskFree,
+  };
+}
+
 function databasePath(): string | null {
   const url = process.env.DATABASE_URL || "";
   if (!url.startsWith("file:")) return null;
@@ -349,11 +397,12 @@ function databasePath(): string | null {
 
 async function storageStats() {
   const dbPath = databasePath();
-  const [db, wal, cache, downloads] = await Promise.all([
+  const [db, wal, cache, downloads, appDownloads] = await Promise.all([
     dbPath ? stat(dbPath).catch(() => null) : null,
     dbPath ? stat(`${dbPath}-wal`).catch(() => null) : null,
     cached("imgcache", 60_000, () => dirStats(IMAGE_CACHE_DIR)),
     cached("downloads", 300_000, () => dirStats(DOWNLOADS_DIR)),
+    appDownloadStats(),
   ]);
 
   return {
@@ -365,6 +414,7 @@ async function storageStats() {
       memBudgetBytes: Number(process.env.IMAGE_CACHE_MEM_MB || 512) * 1024 * 1024,
     },
     downloads: { ...downloads, dir: DOWNLOADS_DIR },
+    appDownloads,
   };
 }
 
