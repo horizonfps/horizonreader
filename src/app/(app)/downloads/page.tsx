@@ -10,6 +10,10 @@ export default async function DownloadsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-lg font-semibold">Downloads</h1>
+      {/* Plain anchor: the service worker only sees document navigations. */}
+      <a href="/offline" className="inline-block text-sm text-muted underline">
+        Salvos no celular
+      </a>
       <DownloadsPanel />
     </div>
   );

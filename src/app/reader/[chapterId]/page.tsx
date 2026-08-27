@@ -15,6 +15,7 @@ type ReaderData = {
   mangaId: number;
   workId: number | null;
   workSlug: string | null;
+  workTitle: string | null;
   chapterNumber?: number;
   title: string;
   prevId: number | null;
@@ -115,6 +116,7 @@ async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderD
     mangaId: row.sourceLink.sourceMangaId,
     workId: row.sourceLink.workId,
     workSlug: row.sourceLink.work?.slug ?? null,
+    workTitle: row.sourceLink.work?.title ?? null,
     chapterNumber: row.number,
     title: row.name,
     prevId,
@@ -160,6 +162,7 @@ async function loadSuwayomi(
     mangaId,
     workId: link?.workId ?? null,
     workSlug: link?.work?.slug ?? null,
+    workTitle: link?.work?.title ?? null,
     chapterNumber: idx >= 0 ? ordered[idx].chapterNumber : undefined,
     title: idx >= 0 ? ordered[idx].name : "",
     prevId: idx > 0 ? ordered[idx - 1].id : null,
@@ -198,6 +201,7 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
       mangaId={data.mangaId}
       workId={data.workId}
       workSlug={data.workSlug}
+      workTitle={data.workTitle}
       chapterNumber={data.chapterNumber}
       pageUrls={data.urls}
       initialPage={initialPage}
