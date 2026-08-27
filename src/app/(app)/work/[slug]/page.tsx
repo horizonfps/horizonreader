@@ -21,6 +21,7 @@ import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
 import BulkDownloadBar from "@/components/BulkDownloadBar";
+import UndoAutoReadButton from "@/components/UndoAutoReadButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
 import PrefetchLink from "@/components/PrefetchLink";
 import ResolvingSources from "@/components/ResolvingSources";
@@ -310,6 +311,20 @@ async function SourcesAndChapters({
   const selected =
     explicitLink ?? selectedFromProgress ?? mostDownloadedLink ?? links[0] ?? null;
 
+  // Read without a single page turned: the shape markSkippedAsRead leaves behind.
+  const autoReadCount = uid
+    ? await prisma.progress
+        .count({
+          where: {
+            userId: uid,
+            read: true,
+            lastPageRead: 0,
+            OR: [{ workId }, { mangaId: selected?.sourceMangaId ?? -1 }],
+          },
+        })
+        .catch(() => 0)
+    : 0;
+
   type ChapterView = {
     id: number;
     name: string;
@@ -481,6 +496,16 @@ async function SourcesAndChapters({
                 workId={workId}
               />
             ) : null}
+          </div>
+        ) : null}
+
+        {autoReadCount > 0 ? (
+          <div className="mb-3">
+            <UndoAutoReadButton
+              workId={workId}
+              mangaId={selected?.sourceMangaId ?? 0}
+              count={autoReadCount}
+            />
           </div>
         ) : null}
 
