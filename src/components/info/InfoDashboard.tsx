@@ -6,6 +6,7 @@ import { Activity, AlertTriangle, ArrowDown, ArrowUp, Cpu, Pause, Play, RefreshC
 import type { ContainerMetrics, DockerInfo } from "@/lib/metrics/docker";
 import type { HostMetrics } from "@/lib/metrics/host";
 import type { ServicesSnapshot } from "@/lib/metrics/services";
+import AppDownloadsPanel from "./AppDownloadsPanel";
 import ContainersPanel, { isFailing } from "./ContainersPanel";
 import LogsPanel from "./LogsPanel";
 import ServicesPanel from "./ServicesPanel";
@@ -360,6 +361,8 @@ export default function InfoDashboard() {
       />
 
       {services.data ? <ServicesPanel services={services.data} /> : null}
+
+      <AppDownloadsPanel />
 
       <LogsPanel paused={paused} />
     </div>
