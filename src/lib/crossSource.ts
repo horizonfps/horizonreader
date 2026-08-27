@@ -6,6 +6,8 @@ import {
   getCachedChapters,
   setCachedChapters,
   loadChaptersForLink,
+  refreshChapters,
+  revalidateChapters,
   type ChapterLink,
 } from "@/lib/chapterCache";
 import { dedupeByNumber, type RawChapter } from "@/lib/chapters";
@@ -84,14 +86,29 @@ function pickPrev(candidates: Candidate[], current: number): Candidate | null {
   return best;
 }
 
+function ordered(chapters: RawChapter[]): RawChapter[] {
+  if (!Array.isArray(chapters)) return [];
+  return dedupeByNumber(chapters).sort((a, b) => a.chapterNumber - b.chapterNumber);
+}
+
+// Neighbour hunting runs inside the reader request, so a source is only asked
+// for its list when that costs a local read. A Suwayomi miss refreshes in the
+// background and offers no candidate this time around.
 async function chaptersOf(link: ChapterLink): Promise<RawChapter[]> {
   try {
     const hit = await getCachedChapters<RawChapter[]>(link);
-    let chapters = hit ? hit.data : await loadChaptersForLink(link);
+    if (hit) {
+      if (hit.stale) revalidateChapters(link);
+      return ordered(hit.data);
+    }
+    if (link.kind !== "scraper") {
+      void refreshChapters(link);
+      return [];
+    }
+    const chapters = await loadChaptersForLink(link);
     if (!Array.isArray(chapters)) return [];
-    if (!hit && chapters.length) await setCachedChapters(link, chapters);
-    chapters = dedupeByNumber(chapters).sort((a, b) => a.chapterNumber - b.chapterNumber);
-    return chapters;
+    if (chapters.length) await setCachedChapters(link, chapters);
+    return ordered(chapters);
   } catch {
     return [];
   }
