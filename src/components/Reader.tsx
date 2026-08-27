@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import SaveOfflineButton from "@/components/SaveOfflineButton";
 
 type Mode = "vertical" | "paged";
 type Dir = "ltr" | "rtl";
@@ -12,6 +13,7 @@ type Props = {
   mangaId: number;
   workId?: number | null;
   workSlug?: string | null;
+  workTitle?: string | null;
   chapterNumber?: number;
   pageUrls: string[];
   initialPage: number;
@@ -148,6 +150,7 @@ export default function Reader({
   mangaId,
   workId,
   workSlug,
+  workTitle,
   chapterNumber,
   pageUrls,
   initialPage,
@@ -595,6 +598,13 @@ export default function Reader({
                 Baixado
               </span>
             ) : null}
+            <SaveOfflineButton
+              chapterId={chapterId}
+              chapterName={title}
+              workTitle={workTitle}
+              workSlug={workSlug}
+              urls={pageUrls}
+            />
             <button
               onClick={(e) => {
                 e.stopPropagation();
