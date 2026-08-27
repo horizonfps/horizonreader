@@ -1,6 +1,6 @@
 // Server-side chapter download queue: pulls every page of a chapter into the
-// `download` disk tier, which no cache sweep ever evicts. One worker per
-// process, resumable across restarts.
+// `download` disk tier, which no cache sweep ever evicts. Worker count and
+// bandwidth come from the policy; resumable across restarts.
 
 import { mkdir, statfs } from "node:fs/promises";
 
@@ -15,7 +15,6 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 const SUWAYOMI_IMAGE_PATH = /^\/api\/v1\/manga\/\d+\/(thumbnail|chapter\/\d+\/page\/\d+)(\?.*)?$/;
 
-const CONCURRENCY = 4;
 const ATTEMPTS = 3;
 const RETRY_BASE_MS = 250;
 const PAGE_TIMEOUT_MS = 20_000;
@@ -58,6 +57,38 @@ export type DownloadStorage = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const SPEED_WINDOW_MS = 10_000;
+
+// Shared token bucket: every worker books the next free slot on one timeline.
+let nextSlotAt = 0;
+
+async function spendBandwidth(bytes: number, limitBps: number): Promise<void> {
+  if (limitBps <= 0 || bytes <= 0) return;
+  const now = Date.now();
+  const start = Math.max(nextSlotAt, now);
+  nextSlotAt = start + (bytes / limitBps) * 1000;
+  const wait = start - now;
+  if (wait > 0) await sleep(Math.min(wait, 30_000));
+}
+
+const speedWindow: { at: number; bytes: number }[] = [];
+
+function recordBytes(n: number): void {
+  if (n <= 0) return;
+  const now = Date.now();
+  speedWindow.push({ at: now, bytes: n });
+  while (speedWindow.length && now - speedWindow[0].at > SPEED_WINDOW_MS) speedWindow.shift();
+}
+
+export function currentSpeedBps(): number {
+  const now = Date.now();
+  while (speedWindow.length && now - speedWindow[0].at > SPEED_WINDOW_MS) speedWindow.shift();
+  if (!speedWindow.length) return 0;
+  const total = speedWindow.reduce((acc, s) => acc + s.bytes, 0);
+  const span = Math.max(now - speedWindow[0].at, 1000);
+  return Math.round((total / span) * 1000);
+}
 
 // SQLite Int columns are 32-bit; a bigger id would be written and then poison
 // every later read of the table.
@@ -271,7 +302,7 @@ export async function queueChapterDownloads(
 
 type PageResult = { bytes: number; ok: boolean };
 
-async function storePage(proxiedUrl: string): Promise<PageResult> {
+async function storePage(proxiedUrl: string, limitBps: number): Promise<PageResult> {
   const origin = originTargetFor(proxiedUrl);
   if (!origin) return { bytes: 0, ok: false };
   const { target, referer } = origin;
@@ -302,6 +333,8 @@ async function storePage(proxiedUrl: string): Promise<PageResult> {
           res.headers.get("content-type") || "application/octet-stream",
           "download",
         );
+        recordBytes(body.byteLength);
+        await spendBandwidth(body.byteLength, limitBps);
         return { bytes: body.byteLength, ok: true };
       }
     }
@@ -312,6 +345,9 @@ async function storePage(proxiedUrl: string): Promise<PageResult> {
 
 async function downloadChapter(chapterId: number): Promise<void> {
   const started = Date.now();
+  const policy = await getPolicy();
+  const limitBps = Math.max(0, policy.maxKbps) * 1024;
+  const pageWorkers = Math.max(1, Math.min(8, policy.parallelPages));
 
   const urls = await chapterPageUrls(chapterId, Number.MAX_SAFE_INTEGER);
   if (!urls.length) {
@@ -349,7 +385,7 @@ async function downloadChapter(chapterId: number): Promise<void> {
       const index = next++;
       if (index >= urls.length) return;
 
-      const result = await storePage(urls[index]);
+      const result = await storePage(urls[index], limitBps);
       if (!result.ok) {
         failed = true;
         return;
@@ -360,7 +396,7 @@ async function downloadChapter(chapterId: number): Promise<void> {
     }
   };
 
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(pageWorkers, urls.length) }, worker));
   await flush();
 
   const error = timedOut ? "tempo esgotado" : failed ? "página não baixou" : null;
@@ -379,7 +415,7 @@ async function downloadChapter(chapterId: number): Promise<void> {
   if (!error) await enforceStorage();
 }
 
-let running = false;
+let active = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 const GATE_RETRY_MS = 60_000;
@@ -394,17 +430,11 @@ function scheduleRetry(): void {
   retryTimer = timer;
 }
 
-export async function runQueue(): Promise<void> {
-  if (running) return;
-  running = true;
-  const skipped = new Set<number>();
+async function chapterWorker(): Promise<void> {
   try {
     for (;;) {
       const row = await prisma.chapterDownload
-        .findFirst({
-          where: { status: "QUEUED", chapterId: { notIn: [...skipped] } },
-          orderBy: { createdAt: "asc" },
-        })
+        .findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } })
         .catch(() => null);
       if (!row) return;
 
@@ -415,22 +445,15 @@ export async function runQueue(): Promise<void> {
         return;
       }
 
-      // The row may have been removed between the pick and now.
-      const fresh = await prisma.chapterDownload
-        .findUnique({ where: { chapterId: row.chapterId } })
-        .catch(() => null);
-      if (!fresh || fresh.status !== "QUEUED") {
-        skipped.add(row.chapterId);
-        continue;
-      }
-
+      // Atomic claim: only one worker can flip the row to RUNNING, and a row
+      // that vanished in the meantime updates nothing.
       const claimed = await prisma.chapterDownload
-        .update({ where: { chapterId: row.chapterId }, data: { status: "RUNNING", error: null } })
+        .updateMany({
+          where: { chapterId: row.chapterId, status: "QUEUED" },
+          data: { status: "RUNNING", error: null },
+        })
         .catch(() => null);
-      if (!claimed) {
-        skipped.add(row.chapterId);
-        continue;
-      }
+      if (!claimed || claimed.count !== 1) continue;
 
       try {
         await downloadChapter(row.chapterId);
@@ -445,8 +468,17 @@ export async function runQueue(): Promise<void> {
     }
   } catch {
     /* the queue never takes the process down */
-  } finally {
-    running = false;
+  }
+}
+
+export async function runQueue(): Promise<void> {
+  const policy = await getPolicy();
+  const want = Math.max(1, Math.min(4, policy.parallelChapters));
+  while (active < want) {
+    active += 1;
+    void chapterWorker().finally(() => {
+      active -= 1;
+    });
   }
 }
 
@@ -489,6 +521,7 @@ export async function downloadsSnapshot(options?: {
   users: DownloadUserUsage[];
   viewerId: number | null;
   canEditQuotas: boolean;
+  speedBps: number;
 }> {
   const dir = tierDir("download");
   await mkdir(dir, { recursive: true }).catch(() => {});
@@ -546,6 +579,7 @@ export async function downloadsSnapshot(options?: {
     policy,
     gate,
     users,
+    speedBps: currentSpeedBps(),
     viewerId: options?.viewerId ?? null,
     canEditQuotas: Boolean(options?.canEditQuotas),
     items: rows.map((r) => ({
