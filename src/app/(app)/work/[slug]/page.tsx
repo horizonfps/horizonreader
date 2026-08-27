@@ -13,12 +13,15 @@ import {
   revalidateChapters,
 } from "@/lib/chapterCache";
 import { groupByScanlator, dedupeByNumber } from "@/lib/chapters";
+import { findChapterMatch } from "@/lib/chapterMatch";
 import { pickResumeChapter, formatChapterNumber, type ResumeKind } from "@/lib/continueReading";
 import { coverProxy } from "@/lib/cards";
 import RatingBadge from "@/components/RatingBadge";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
+import BulkDownloadBar from "@/components/BulkDownloadBar";
+import UndoAutoReadButton from "@/components/UndoAutoReadButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
 import PrefetchLink from "@/components/PrefetchLink";
 import ResolvingSources from "@/components/ResolvingSources";
@@ -275,7 +278,52 @@ async function SourcesAndChapters({
       }
     }
   }
-  const selected = links.find((l) => l.id === selectedId) ?? selectedFromProgress ?? links[0] ?? null;
+  // Downloads of the whole work, not just the open source: a chapter downloaded
+  // through source A is reused when the same number is opened on source B.
+  const workDownloads = await prisma.chapterDownload
+    .findMany({
+      where: { workId },
+      select: { chapterId: true, chapterNumber: true, mangaId: true, status: true },
+    })
+    .catch(() => []);
+
+  const downloadStatusByChapter = new Map<number, DownloadStatus>(
+    workDownloads.map((row) => [row.chapterId, row.status as DownloadStatus]),
+  );
+  const doneByMangaId = new Map<number, number>();
+  for (const row of workDownloads) {
+    if (row.status !== "DONE") continue;
+    doneByMangaId.set(row.mangaId, (doneByMangaId.get(row.mangaId) ?? 0) + 1);
+  }
+
+  const explicitLink = links.find((l) => l.id === selectedId) ?? null;
+  let mostDownloadedLink: any | null = null;
+  if (!explicitLink && !selectedFromProgress) {
+    let best = 0;
+    for (const link of links) {
+      const done = doneByMangaId.get(link.sourceMangaId) ?? 0;
+      if (done > best) {
+        best = done;
+        mostDownloadedLink = link;
+      }
+    }
+  }
+  const selected =
+    explicitLink ?? selectedFromProgress ?? mostDownloadedLink ?? links[0] ?? null;
+
+  // Read without a single page turned: the shape markSkippedAsRead leaves behind.
+  const autoReadCount = uid
+    ? await prisma.progress
+        .count({
+          where: {
+            userId: uid,
+            read: true,
+            lastPageRead: 0,
+            OR: [{ workId }, { mangaId: selected?.sourceMangaId ?? -1 }],
+          },
+        })
+        .catch(() => 0)
+    : 0;
 
   type ChapterView = {
     id: number;
@@ -295,6 +343,26 @@ async function SourcesAndChapters({
       if (chapters.length) await setCachedChapters(selected, chapters);
     }
   }
+
+  // Chapters already on disk, from any source of this work: the pool the open
+  // source's rows are matched against by number, name and upload date.
+  const doneIds = new Set(
+    workDownloads.filter((row) => row.status === "DONE").map((row) => row.chapterId),
+  );
+  const scanLinks = links
+    .filter((link) => (doneByMangaId.get(link.sourceMangaId) ?? 0) > 0)
+    .slice(0, 4);
+  const scanned = await Promise.all(
+    scanLinks.map(async (link) => {
+      if (selected && link.id === selected.id) return chapters;
+      const hit = await getCachedChapters<ChapterView[]>(link);
+      if (hit) return hit.data;
+      const list = (await loadChaptersForLink(link)) as ChapterView[];
+      if (list.length) await setCachedChapters(link, list);
+      return list;
+    }),
+  );
+  const downloadedElsewhere = scanned.flat().filter((c) => doneIds.has(c.id));
 
   // Split the source's chapters by scanlator so a single scan group reads clean.
   // ?scan picks a group; else the largest. dedupeByNumber drops re-uploads so
@@ -316,18 +384,6 @@ async function SourcesAndChapters({
 
   const visibleChapterIds = new Set(visible.map((chapter) => chapter.id));
 
-  const downloadRows = visibleChapterIds.size
-    ? await prisma.chapterDownload
-        .findMany({
-          where: { chapterId: { in: [...visibleChapterIds] } },
-          select: { chapterId: true, status: true },
-        })
-        .catch(() => [])
-    : [];
-  const downloadStatusByChapter = new Map<number, DownloadStatus>(
-    downloadRows.map((row) => [row.chapterId, row.status as DownloadStatus]),
-  );
-
   const progressList =
     uid && selected
       ? (
@@ -342,7 +398,13 @@ async function SourcesAndChapters({
   // Reading entry point: the furthest point reached, never a skipped chapter.
   const chaptersAsc = [...visible].reverse();
   const resume = pickResumeChapter(chaptersAsc, progressList);
-  const startId = resume?.chapterId ?? null;
+  const resumeOwnStatus = resume ? downloadStatusByChapter.get(resume.chapterId) ?? null : null;
+  const resumeChapter = resume ? chaptersAsc.find((c) => c.id === resume.chapterId) ?? null : null;
+  const resumeMirroredId =
+    resumeChapter && resumeOwnStatus !== "DONE"
+      ? findChapterMatch(resumeChapter, downloadedElsewhere)?.id ?? null
+      : null;
+  const startId = resumeMirroredId ?? resume?.chapterId ?? null;
   const startLabel = resume
     ? `${RESUME_PREFIX[resume.kind]} · Cap. ${formatChapterNumber(resume.chapterNumber)}`
     : "";
@@ -437,6 +499,28 @@ async function SourcesAndChapters({
           </div>
         ) : null}
 
+        {autoReadCount > 0 ? (
+          <div className="mb-3">
+            <UndoAutoReadButton
+              workId={workId}
+              mangaId={selected?.sourceMangaId ?? 0}
+              count={autoReadCount}
+            />
+          </div>
+        ) : null}
+
+        {selected && visible.length > 0 ? (
+          <BulkDownloadBar
+            chapters={chaptersAsc.map((c) => ({
+              chapterId: c.id,
+              name: c.name,
+              number: c.chapterNumber,
+            }))}
+            mangaId={selected.sourceMangaId}
+            workId={workId}
+          />
+        ) : null}
+
         {visible.length === 0 ? (
           <p className="text-sm text-muted">
             {selected
@@ -450,15 +534,29 @@ async function SourcesAndChapters({
             {visible.map((c) => {
               const read = readSet.has(c.id);
               const sub = fmtDate(c.uploadDate);
+              const ownStatus = downloadStatusByChapter.get(c.id) ?? null;
+              const mirrored =
+                ownStatus === "DONE" ? null : findChapterMatch(c, downloadedElsewhere);
+              const mirroredId = mirrored?.id ?? null;
+              const status = ownStatus ?? (mirroredId ? "DONE" : null);
               return (
                 <li key={c.id} className="flex items-center gap-2">
                   <Link
-                    href={`/reader/${c.id}`}
+                    href={`/reader/${mirroredId ?? c.id}`}
                     className="flex min-w-0 flex-1 items-center gap-3 py-2.5"
                   >
                     <div className="min-w-0 flex-1">
                       <p className={`truncate text-sm ${read ? "text-muted" : "text-text"}`}>{c.name}</p>
-                      {sub ? <p className="truncate text-xs text-muted">{sub}</p> : null}
+                      {sub || mirroredId ? (
+                        <div className="flex items-center gap-1.5">
+                          {sub ? <p className="truncate text-xs text-muted">{sub}</p> : null}
+                          {mirroredId ? (
+                            <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">
+                              Baixado em outra fonte
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                     {read ? <Check className="h-4 w-4 shrink-0 text-muted" /> : null}
                   </Link>
@@ -467,7 +565,7 @@ async function SourcesAndChapters({
                       chapters={[{ chapterId: c.id, name: c.name, number: c.chapterNumber }]}
                       mangaId={selected.sourceMangaId}
                       workId={workId}
-                      initialStatus={downloadStatusByChapter.get(c.id) ?? null}
+                      initialStatus={status}
                     />
                   ) : null}
                 </li>

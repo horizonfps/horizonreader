@@ -67,15 +67,17 @@ export async function POST(req: NextRequest) {
   const items = parseItems(body);
   if (items.length === 0) return NextResponse.json({ error: "no_ids" }, { status: 400 });
 
-  const queued = await queueChapterDownloads(items);
-  return NextResponse.json({ ok: true, queued });
+  const { queued, blocked } = await queueChapterDownloads(items, session.uid);
+  return NextResponse.json({ ok: true, queued, blocked });
 }
 
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  return NextResponse.json(await downloadsSnapshot());
+  return NextResponse.json(
+    await downloadsSnapshot({ viewerId: session.uid, canEditQuotas: session.isAdmin }),
+  );
 }
 
 export async function DELETE(req: NextRequest) {

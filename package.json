@@ -16,6 +16,7 @@
     "sync-extensions": "node --env-file-if-exists=.env --experimental-strip-types scripts/sync-extensions.ts",
     "repair-source-links": "node --env-file-if-exists=.env --experimental-strip-types scripts/repair-source-links.ts",
     "match-test": "node --experimental-strip-types scripts/match-test.ts",
+    "chapter-match-test": "node --experimental-strip-types scripts/chapter-match-test.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

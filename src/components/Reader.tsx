@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import SaveOfflineButton from "@/components/SaveOfflineButton";
+import { flushProgress, queueProgress, type PendingProgress } from "@/lib/offlineProgress";
 
 type Mode = "vertical" | "paged";
 type Dir = "ltr" | "rtl";
@@ -12,12 +14,15 @@ type Props = {
   mangaId: number;
   workId?: number | null;
   workSlug?: string | null;
+  workTitle?: string | null;
   chapterNumber?: number;
   pageUrls: string[];
   initialPage: number;
   title: string;
   prevChapterId: number | null;
   nextChapterId: number | null;
+  prevSourceName?: string | null;
+  nextSourceName?: string | null;
   downloaded?: boolean;
 };
 
@@ -148,12 +153,15 @@ export default function Reader({
   mangaId,
   workId,
   workSlug,
+  workTitle,
   chapterNumber,
   pageUrls,
   initialPage,
   title,
   prevChapterId,
   nextChapterId,
+  prevSourceName,
+  nextSourceName,
   downloaded,
 }: Props) {
   const router = useRouter();
@@ -214,6 +222,19 @@ export default function Reader({
   const saveProgress = useCallback(
     (p: number, opts?: { beacon?: boolean }) => {
       const read = p >= total - 1;
+      const pending = (): PendingProgress => ({
+        chapterId,
+        mangaId,
+        workId: workId ?? null,
+        chapterNumber: chapterNumber ?? null,
+        lastPageRead: p,
+        read,
+        at: Date.now(),
+      });
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        void queueProgress(pending());
+        return;
+      }
       const payload = JSON.stringify({ mangaId, chapterId, workId, chapterNumber, lastPageRead: p, read });
       if (opts?.beacon && typeof navigator !== "undefined" && navigator.sendBeacon) {
         navigator.sendBeacon("/api/progress", new Blob([payload], { type: "application/json" }));
@@ -224,10 +245,17 @@ export default function Reader({
         headers: { "content-type": "application/json" },
         body: payload,
         keepalive: true,
-      }).catch(() => {});
+      }).catch(() => {
+        void queueProgress(pending());
+      });
     },
     [mangaId, chapterId, workId, chapterNumber, total],
   );
+
+  // Anything read while the network was down still owes the server a save.
+  useEffect(() => {
+    void flushProgress();
+  }, []);
 
   // debounced progress save while reading (only once resume has settled)
   useEffect(() => {
@@ -538,7 +566,7 @@ export default function Reader({
           <div ref={endRef} className="flex flex-col items-center gap-3 py-10">
             {nextChapterId ? (
               <Link href={`/reader/${nextChapterId}`} className="rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-on-accent">
-                Próximo capítulo →
+                {nextSourceName ? `Próximo capítulo → (em ${nextSourceName})` : "Próximo capítulo →"}
               </Link>
             ) : (
               <p className="text-sm text-muted">Fim.</p>
@@ -595,6 +623,16 @@ export default function Reader({
                 Baixado
               </span>
             ) : null}
+            <SaveOfflineButton
+              chapterId={chapterId}
+              chapterName={title}
+              workTitle={workTitle}
+              workSlug={workSlug}
+              mangaId={mangaId}
+              workId={workId}
+              chapterNumber={chapterNumber}
+              urls={pageUrls}
+            />
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -611,8 +649,11 @@ export default function Reader({
 
           <div className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 bg-black/70 px-4 py-3 text-white backdrop-blur">
             {prevChapterId ? (
-              <Link href={`/reader/${prevChapterId}`} className="text-xs">
-                ‹ cap
+              <Link href={`/reader/${prevChapterId}`} className="flex items-center gap-1 text-xs">
+                <span>‹ cap</span>
+                {prevSourceName ? (
+                  <span className="max-w-[9rem] truncate text-white/70">· {prevSourceName}</span>
+                ) : null}
               </Link>
             ) : (
               <span className="w-8" />
@@ -634,8 +675,11 @@ export default function Reader({
               {page + 1}/{total}
             </span>
             {nextChapterId ? (
-              <Link href={`/reader/${nextChapterId}`} className="text-xs">
-                cap ›
+              <Link href={`/reader/${nextChapterId}`} className="flex items-center gap-1 text-xs">
+                <span>cap ›</span>
+                {nextSourceName ? (
+                  <span className="max-w-[9rem] truncate text-white/70">· {nextSourceName}</span>
+                ) : null}
               </Link>
             ) : (
               <span className="w-8" />

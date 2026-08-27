@@ -9,19 +9,21 @@ datasource db {
 
 // Accounts are created manually (CLI / direct DB insert). No self sign-up.
 model User {
-  id           Int              @id @default(autoincrement())
-  username     String           @unique
-  passwordHash String
-  isAdmin      Boolean          @default(false)
-  displayName  String?
-  avatarUrl    String?
-  bannerUrl    String?
-  bio          String?
-  createdAt    DateTime         @default(now())
-  follows      Follow[]
-  progress     Progress[]
-  favorites    Favorite[]
-  history      ReadingHistory[]
+  id              Int                @id @default(autoincrement())
+  username        String             @unique
+  passwordHash    String
+  isAdmin         Boolean            @default(false)
+  displayName     String?
+  avatarUrl       String?
+  bannerUrl       String?
+  bio             String?
+  downloadQuotaMb Int                @default(0) // 0 = falls back to the policy default
+  createdAt       DateTime           @default(now())
+  follows         Follow[]
+  progress        Progress[]
+  favorites       Favorite[]
+  history         ReadingHistory[]
+  downloads       ChapterDownload[]
 }
 
 // Legacy per-user library. Superseded by Favorite; kept so old data survives.
@@ -185,12 +187,34 @@ model ChapterDownload {
   bytes         Int      @default(0)
   pages         String   @default("[]") // JSON array of proxied page urls
   error         String?
+  userId        Int? // null = downloaded before per-user quotas existed
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   work          Work?    @relation(fields: [workId], references: [id], onDelete: SetNull)
+  user          User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([workId])
   @@index([status])
+  @@index([userId])
+}
+
+// Single row of policy for the download queue: how much space it may use, how
+// long a download is kept and the hours the queue may run.
+model DownloadPolicy {
+  id             Int      @id @default(autoincrement())
+  quotaMb        Int      @default(0) // 0 = no limit
+  perUserQuotaMb Int      @default(0) // default per-account quota; 0 = no limit
+  keepDays       Int      @default(0) // 0 = never delete by age
+  minFreeGb      Int      @default(2)
+  windowStart    String   @default("") // "HH:MM"; empty = any hour
+  windowEnd      String   @default("")
+  paused         Boolean  @default(false)
+
+  maxKbps          Int @default(0) // 0 = no speed limit
+  parallelChapters Int @default(1)
+  parallelPages    Int @default(4)
+
+  updatedAt DateTime @updatedAt
 }
 
 // Append-only reading events for the profile timeline + xlsx export.

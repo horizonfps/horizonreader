@@ -30,6 +30,8 @@ export default function DownloadButton({
   const [status, setStatus] = useState<DownloadStatus | null>(initialStatus);
   const [queued, setQueued] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [quotaFull, setQuotaFull] = useState(false);
+  const [userQuotaFull, setUserQuotaFull] = useState(false);
 
   async function send(e: React.MouseEvent) {
     // The chapter row is a link; the button must not navigate.
@@ -43,24 +45,40 @@ export default function DownloadButton({
       body: JSON.stringify({ workId, mangaId, chapters }),
     }).catch(() => null);
     if (res?.ok) {
-      const data = (await res.json().catch(() => null)) as { queued?: number } | null;
-      setQueued(Number.isFinite(Number(data?.queued)) ? Number(data?.queued) : chapters.length);
-      setStatus("QUEUED");
+      const data = (await res.json().catch(() => null)) as {
+        queued?: number;
+        blocked?: string | null;
+      } | null;
+      if (data?.blocked === "quota" || data?.blocked === "user_quota") {
+        setQuotaFull(data.blocked === "quota");
+        setUserQuotaFull(data.blocked === "user_quota");
+      } else {
+        setQuotaFull(false);
+        setUserQuotaFull(false);
+        setQueued(Number.isFinite(Number(data?.queued)) ? Number(data?.queued) : chapters.length);
+        setStatus("QUEUED");
+      }
     }
     setBusy(false);
   }
 
   const sent = queued !== null;
   const done = status === "DONE";
-  const disabled = busy || done || sent || status === "QUEUED" || status === "RUNNING";
+  const blocked = quotaFull || userQuotaFull;
+  const disabled =
+    busy || (!blocked && (done || sent || status === "QUEUED" || status === "RUNNING"));
 
-  const text = label
-    ? sent
-      ? `Na fila (${queued})`
+  const text = userQuotaFull
+    ? "Sua cota acabou"
+    : quotaFull
+      ? "Cota cheia"
       : label
-    : status
-      ? LABELS[status]
-      : "Baixar";
+        ? sent
+          ? `Na fila (${queued})`
+          : label
+        : status
+          ? LABELS[status]
+          : "Baixar";
 
   const Icon = done ? Check : Download;
 
