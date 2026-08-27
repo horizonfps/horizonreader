@@ -21,6 +21,8 @@ type Props = {
   title: string;
   prevChapterId: number | null;
   nextChapterId: number | null;
+  prevSourceName?: string | null;
+  nextSourceName?: string | null;
   downloaded?: boolean;
 };
 
@@ -158,6 +160,8 @@ export default function Reader({
   title,
   prevChapterId,
   nextChapterId,
+  prevSourceName,
+  nextSourceName,
   downloaded,
 }: Props) {
   const router = useRouter();
@@ -562,7 +566,7 @@ export default function Reader({
           <div ref={endRef} className="flex flex-col items-center gap-3 py-10">
             {nextChapterId ? (
               <Link href={`/reader/${nextChapterId}`} className="rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-on-accent">
-                Próximo capítulo →
+                {nextSourceName ? `Próximo capítulo → (em ${nextSourceName})` : "Próximo capítulo →"}
               </Link>
             ) : (
               <p className="text-sm text-muted">Fim.</p>
@@ -645,8 +649,11 @@ export default function Reader({
 
           <div className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 bg-black/70 px-4 py-3 text-white backdrop-blur">
             {prevChapterId ? (
-              <Link href={`/reader/${prevChapterId}`} className="text-xs">
-                ‹ cap
+              <Link href={`/reader/${prevChapterId}`} className="flex items-center gap-1 text-xs">
+                <span>‹ cap</span>
+                {prevSourceName ? (
+                  <span className="max-w-[9rem] truncate text-white/70">· {prevSourceName}</span>
+                ) : null}
               </Link>
             ) : (
               <span className="w-8" />
@@ -668,8 +675,11 @@ export default function Reader({
               {page + 1}/{total}
             </span>
             {nextChapterId ? (
-              <Link href={`/reader/${nextChapterId}`} className="text-xs">
-                cap ›
+              <Link href={`/reader/${nextChapterId}`} className="flex items-center gap-1 text-xs">
+                <span>cap ›</span>
+                {nextSourceName ? (
+                  <span className="max-w-[9rem] truncate text-white/70">· {nextSourceName}</span>
+                ) : null}
               </Link>
             ) : (
               <span className="w-8" />

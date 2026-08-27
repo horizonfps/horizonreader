@@ -6,6 +6,7 @@ import { getScraper } from "@/lib/scrapers";
 import { NATIVE_OFFSET, isNativeChapterId, proxyScraperImage } from "@/lib/scrapers/native";
 import { suwayomiPageUrls } from "@/lib/readerPages";
 import { dedupeByNumber, scanlatorKey } from "@/lib/chapters";
+import { crossSourceNeighbours } from "@/lib/crossSource";
 import Reader from "@/components/Reader";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +19,11 @@ type ReaderData = {
   workTitle: string | null;
   chapterNumber?: number;
   title: string;
+  uploadDate: string | null;
   prevId: number | null;
   nextId: number | null;
+  prevNumber: number | null;
+  nextNumber: number | null;
 };
 
 type StoredChapter = { urls: string[]; mangaId: number };
@@ -108,8 +112,8 @@ async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderD
     rowId,
   ).sort((a, b) => a.chapterNumber - b.chapterNumber);
   const idx = siblings.findIndex((s) => s.id === rowId);
-  const prevId = idx > 0 ? NATIVE_OFFSET + siblings[idx - 1].id : null;
-  const nextId = idx >= 0 && idx < siblings.length - 1 ? NATIVE_OFFSET + siblings[idx + 1].id : null;
+  const prev = idx > 0 ? siblings[idx - 1] : null;
+  const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
 
   return {
     urls: pages,
@@ -119,8 +123,11 @@ async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderD
     workTitle: row.sourceLink.work?.title ?? null,
     chapterNumber: row.number,
     title: row.name,
-    prevId,
-    nextId,
+    uploadDate: row.uploadDate ? String(row.uploadDate.getTime()) : null,
+    prevId: prev ? NATIVE_OFFSET + prev.id : null,
+    nextId: next ? NATIVE_OFFSET + next.id : null,
+    prevNumber: prev ? prev.chapterNumber : null,
+    nextNumber: next ? next.chapterNumber : null,
   };
 }
 
@@ -165,8 +172,11 @@ async function loadSuwayomi(
     workTitle: link?.work?.title ?? null,
     chapterNumber: idx >= 0 ? ordered[idx].chapterNumber : undefined,
     title: idx >= 0 ? ordered[idx].name : "",
+    uploadDate: idx >= 0 ? (ordered[idx].uploadDate ?? null) : null,
     prevId: idx > 0 ? ordered[idx - 1].id : null,
     nextId: idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].id : null,
+    prevNumber: idx > 0 ? ordered[idx - 1].chapterNumber : null,
+    nextNumber: idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].chapterNumber : null,
   };
 }
 
@@ -194,6 +204,19 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
     Math.max(data.urls.length - 1, 0),
   );
 
+  const cross = await crossSourceNeighbours({
+    workId: data.workId,
+    mangaId: data.mangaId,
+    current: {
+      id: chapterId,
+      name: data.title,
+      chapterNumber: data.chapterNumber ?? 0,
+      uploadDate: data.uploadDate,
+    },
+    inSourceNext: data.nextId ? { id: data.nextId, chapterNumber: data.nextNumber ?? 0 } : null,
+    inSourcePrev: data.prevId ? { id: data.prevId, chapterNumber: data.prevNumber ?? 0 } : null,
+  });
+
   return (
     <Reader
       key={chapterId}
@@ -206,8 +229,10 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
       pageUrls={data.urls}
       initialPage={initialPage}
       title={data.title}
-      prevChapterId={data.prevId}
-      nextChapterId={data.nextId}
+      prevChapterId={cross.prev?.id ?? null}
+      nextChapterId={cross.next?.id ?? null}
+      prevSourceName={cross.prev?.fromOtherSource ? cross.prev.sourceName : null}
+      nextSourceName={cross.next?.fromOtherSource ? cross.next.sourceName : null}
       downloaded={!!stored}
     />
   );
