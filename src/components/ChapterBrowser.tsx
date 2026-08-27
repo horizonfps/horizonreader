@@ -1,0 +1,410 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { BookOpen, Check } from "lucide-react";
+import DownloadButton, { type DownloadStatus } from "@/components/DownloadButton";
+import BulkDownloadBar from "@/components/BulkDownloadBar";
+import UndoAutoReadButton from "@/components/UndoAutoReadButton";
+import { pickResumeChapter, formatChapterNumber, type ResumeKind } from "@/lib/continueReading";
+import type { SourceView } from "@/lib/workChapters";
+
+export type SourceChip = {
+  id: number;
+  sourceName: string;
+  chapterCount: number;
+  healthScore: number;
+  lang: string | null;
+};
+
+type Phase = "ready" | "loading" | "slow" | "failed";
+
+const POLL_MS = 2_000;
+const SLOW_MS = 8_000;
+const FAIL_MS = 45_000;
+
+const RESUME_PREFIX: Record<ResumeKind, string> = {
+  start: "Começar a ler",
+  resume: "Continuar",
+  next: "Continuar",
+  reread: "Reler último",
+};
+
+const CHIP = "flex shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs";
+
+function healthColor(score?: number | null): string {
+  const v = score ?? 0;
+  if (v >= 55) return "bg-green-500";
+  if (v >= 30) return "bg-orange-500";
+  return "bg-red-500";
+}
+
+// Suwayomi uploadDate is epoch millis as a string; fall back to Date.parse.
+function fmtDate(s?: string | null): string {
+  if (!s) return "";
+  const n = Number(s);
+  const t = Number.isFinite(n) && n > 0 ? n : Date.parse(s);
+  if (!Number.isFinite(t) || !t) return "";
+  return new Date(t).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+const warmed = new Set<number>();
+
+export default function ChapterBrowser({
+  slug,
+  workId,
+  sources,
+  initialSourceId,
+  initialScan,
+  initialView,
+}: {
+  slug: string;
+  workId: number;
+  sources: SourceChip[];
+  initialSourceId: number | null;
+  initialScan: string | null;
+  initialView: SourceView | null;
+}) {
+  const [activeId, setActiveId] = useState<number | null>(initialSourceId);
+  const [views, setViews] = useState<Map<number, SourceView>>(() =>
+    initialView ? new Map([[initialView.linkId, initialView]]) : new Map(),
+  );
+  const [scan, setScan] = useState<string | null>(initialScan);
+  const [phase, setPhase] = useState<Phase>(
+    initialView || initialSourceId == null ? "ready" : "loading",
+  );
+
+  const wantedRef = useRef<number | null>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const clearTimers = useCallback(() => {
+    for (const t of timersRef.current) clearTimeout(t);
+    timersRef.current = [];
+  }, []);
+
+  const load = useCallback(
+    (id: number) => {
+      clearTimers();
+      wantedRef.current = id;
+      setPhase("loading");
+
+      timersRef.current.push(
+        setTimeout(() => {
+          if (wantedRef.current === id) setPhase("slow");
+        }, SLOW_MS),
+        setTimeout(() => {
+          if (wantedRef.current !== id) return;
+          wantedRef.current = null;
+          clearTimers();
+          setPhase("failed");
+        }, FAIL_MS),
+      );
+
+      const poll = async () => {
+        if (wantedRef.current !== id) return;
+        const res = await fetch(`/api/work-chapters?link=${id}`).catch(() => null);
+        if (wantedRef.current !== id) return;
+        const data = res?.ok
+          ? ((await res.json().catch(() => null)) as
+              | { status?: string; view?: SourceView }
+              | null)
+          : null;
+        if (wantedRef.current !== id) return;
+        if (data?.status === "ready" && data.view) {
+          wantedRef.current = null;
+          clearTimers();
+          setViews((prev) => {
+            const next = new Map(prev);
+            next.set(id, data.view!);
+            return next;
+          });
+          setPhase("ready");
+          return;
+        }
+        timersRef.current.push(setTimeout(poll, POLL_MS));
+      };
+      void poll();
+    },
+    [clearTimers],
+  );
+
+  useEffect(() => {
+    if (!initialView && initialSourceId != null) load(initialSourceId);
+    return () => {
+      wantedRef.current = null;
+      clearTimers();
+    };
+    // Runs once: later switches go through selectSource.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function warm(id: number) {
+    if (warmed.has(id)) return;
+    warmed.add(id);
+    void fetch("/api/warm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ href: `/work/${slug}?src=${id}` }),
+    }).catch(() => {});
+  }
+
+  function selectSource(id: number) {
+    if (id === activeId) return;
+    setActiveId(id);
+    setScan(null);
+    window.history.replaceState(null, "", `/work/${slug}?src=${id}`);
+    if (views.has(id)) {
+      wantedRef.current = null;
+      clearTimers();
+      setPhase("ready");
+      return;
+    }
+    load(id);
+  }
+
+  function selectScan(key: string) {
+    setScan(key);
+    if (activeId != null) {
+      window.history.replaceState(
+        null,
+        "",
+        `/work/${slug}?src=${activeId}&scan=${encodeURIComponent(key)}`,
+      );
+    }
+  }
+
+  // Zero-chapter links and same name+language twins only add noise; the open
+  // source always stays, even when it is one of them.
+  const chips = useMemo(() => {
+    const kept = new Map<string, SourceChip>();
+    for (const s of sources) {
+      if (s.chapterCount === 0 && s.id !== activeId) continue;
+      const key = JSON.stringify([s.sourceName, s.lang ?? ""]);
+      const cur = kept.get(key);
+      if (!cur) {
+        kept.set(key, s);
+        continue;
+      }
+      if (cur.id === activeId) continue;
+      if (s.id === activeId || s.chapterCount > cur.chapterCount) kept.set(key, s);
+    }
+    return [...kept.values()];
+  }, [sources, activeId]);
+
+  const view = activeId != null ? views.get(activeId) ?? null : null;
+  const activeName =
+    sources.find((s) => s.id === activeId)?.sourceName || view?.sourceName || "Fonte";
+
+  const groups = view?.groups ?? [];
+  const activeGroup = (scan != null ? groups.find((g) => g.key === scan) : undefined) ?? groups[0];
+  const visible = activeGroup?.chapters ?? [];
+  const chaptersAsc = useMemo(() => [...visible].reverse(), [visible]);
+
+  const downloadStatus = useMemo(
+    () => new Map<number, DownloadStatus>(view?.downloadStatus ?? []),
+    [view],
+  );
+  const mirroredById = useMemo(() => new Map<number, number>(view?.mirrored ?? []), [view]);
+  const readSet = useMemo(
+    () => new Set((view?.progress ?? []).filter((p) => p.read).map((p) => p.chapterId)),
+    [view],
+  );
+
+  const resume = useMemo(
+    () =>
+      pickResumeChapter(
+        chaptersAsc,
+        (view?.progress ?? []).map((p) => ({ ...p, updatedAt: new Date(p.updatedAt) })),
+      ),
+    [chaptersAsc, view],
+  );
+  const startId = resume ? mirroredById.get(resume.chapterId) ?? resume.chapterId : null;
+  const startLabel = resume
+    ? `${RESUME_PREFIX[resume.kind]} · Cap. ${formatChapterNumber(resume.chapterNumber)}`
+    : "";
+  const resumeIndex = resume ? chaptersAsc.findIndex((c) => c.id === resume.chapterId) : -1;
+  const nextChapters =
+    resumeIndex >= 0
+      ? chaptersAsc
+          .slice(resumeIndex, resumeIndex + 5)
+          .map((c) => ({ chapterId: c.id, name: c.name, number: c.chapterNumber }))
+      : [];
+
+  const waiting = phase === "loading" || phase === "slow";
+
+  return (
+    <>
+      <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
+        {chips.map((s) => {
+          const active = s.id === activeId;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => selectSource(s.id)}
+              onPointerEnter={() => warm(s.id)}
+              onTouchStart={() => warm(s.id)}
+              className={`${CHIP} ${active ? "bg-accent text-on-accent" : "bg-elevated text-text"}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${healthColor(s.healthScore)}`} />
+              <span className="max-w-[10rem] truncate">{s.sourceName || "Fonte"}</span>
+              <span className={active ? "text-on-accent" : "text-muted"}>{s.chapterCount}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {groups.length > 1 ? (
+        <section className="mt-6">
+          <h2 className="mb-2 text-sm text-muted">Grupos de scan</h2>
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4">
+            {groups.map((g) => {
+              const active = activeGroup?.key === g.key;
+              return (
+                <button
+                  key={g.key || "—"}
+                  type="button"
+                  onClick={() => selectScan(g.key)}
+                  className={`${CHIP} ${active ? "bg-accent text-on-accent" : "bg-elevated text-text"}`}
+                >
+                  <span className="max-w-[10rem] truncate">{g.key || "Sem grupo"}</span>
+                  <span className={active ? "text-on-accent" : "text-muted"}>{g.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="mt-6">
+        <h2 className="mb-2 text-sm text-muted">
+          Capítulos{!waiting && phase !== "failed" && visible.length ? ` (${visible.length})` : ""}
+        </h2>
+
+        {waiting ? (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2.5 text-sm text-muted">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-accent" />
+              Carregando capítulos de {activeName}…
+            </div>
+            {phase === "slow" ? (
+              <p className="text-xs text-muted">
+                Esta fonte está demorando — pode levar até um minuto.
+              </p>
+            ) : null}
+          </div>
+        ) : phase === "failed" ? (
+          <div className="space-y-2">
+            <p className="text-sm text-muted">{activeName} não respondeu.</p>
+            <button
+              type="button"
+              onClick={() => activeId != null && load(activeId)}
+              className="rounded-lg border border-border px-3 py-2 text-xs text-muted hover:bg-elevated"
+            >
+              Tentar de novo
+            </button>
+          </div>
+        ) : (
+          <>
+            {startId ? (
+              <div className="mb-3 flex gap-2">
+                <Link
+                  href={`/reader/${startId}`}
+                  className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-on-accent hover:bg-accent-hover"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  {startLabel}
+                </Link>
+                {view && nextChapters.length > 0 ? (
+                  <DownloadButton
+                    key={`next-${view.linkId}`}
+                    label="Baixar 5 próximos"
+                    chapters={nextChapters}
+                    mangaId={view.sourceMangaId}
+                    workId={workId}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+
+            {view && view.autoReadCount > 0 ? (
+              <div className="mb-3">
+                <UndoAutoReadButton
+                  workId={workId}
+                  mangaId={view.sourceMangaId}
+                  count={view.autoReadCount}
+                />
+              </div>
+            ) : null}
+
+            {view && visible.length > 0 ? (
+              <BulkDownloadBar
+                key={`bulk-${view.linkId}-${activeGroup?.key ?? ""}`}
+                chapters={chaptersAsc.map((c) => ({
+                  chapterId: c.id,
+                  name: c.name,
+                  number: c.chapterNumber,
+                }))}
+                mangaId={view.sourceMangaId}
+                workId={workId}
+              />
+            ) : null}
+
+            {visible.length === 0 ? (
+              <p className="text-sm text-muted">
+                {view
+                  ? chips.length > 1
+                    ? "Esta fonte não tem capítulos. Tente outra fonte acima."
+                    : "Esta fonte ainda não tem capítulos."
+                  : "Selecione uma fonte para ver os capítulos."}
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {visible.map((c) => {
+                  const read = readSet.has(c.id);
+                  const sub = fmtDate(c.uploadDate);
+                  const own = downloadStatus.get(c.id) ?? null;
+                  const mirroredId = own === "DONE" ? null : mirroredById.get(c.id) ?? null;
+                  const status = own ?? (mirroredId ? "DONE" : null);
+                  return (
+                    <li key={c.id} className="flex items-center gap-2">
+                      <Link
+                        href={`/reader/${mirroredId ?? c.id}`}
+                        className="flex min-w-0 flex-1 items-center gap-3 py-2.5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className={`truncate text-sm ${read ? "text-muted" : "text-text"}`}>
+                            {c.name}
+                          </p>
+                          {sub || mirroredId ? (
+                            <div className="flex items-center gap-1.5">
+                              {sub ? <p className="truncate text-xs text-muted">{sub}</p> : null}
+                              {mirroredId ? (
+                                <span className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">
+                                  Baixado em outra fonte
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                        {read ? <Check className="h-4 w-4 shrink-0 text-muted" /> : null}
+                      </Link>
+                      {view ? (
+                        <DownloadButton
+                          chapters={[{ chapterId: c.id, name: c.name, number: c.chapterNumber }]}
+                          mangaId={view.sourceMangaId}
+                          workId={workId}
+                          initialStatus={status}
+                        />
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
+    </>
+  );
+}
