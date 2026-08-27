@@ -51,6 +51,10 @@ export default function ServicesPanel({ services }: { services: ServicesSnapshot
   const cacheUsage = storage.imageCache.budgetBytes
     ? (storage.imageCache.bytes / storage.imageCache.budgetBytes) * 100
     : 0;
+  const appDownloads = storage.appDownloads;
+  const diskUsage = appDownloads.diskTotal
+    ? ((appDownloads.diskTotal - appDownloads.diskFree) / appDownloads.diskTotal) * 100
+    : 0;
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
@@ -182,11 +186,39 @@ export default function ServicesPanel({ services }: { services: ServicesSnapshot
               sub={storage.database.path || "—"}
             />
             <Stat
-              label="Downloads"
+              label="Pasta do Suwayomi"
               value={storage.downloads.exists ? bytes(storage.downloads.bytes) : "não montado"}
               sub={storage.downloads.exists ? `${count(storage.downloads.files)} arquivos` : storage.downloads.dir}
             />
           </div>
+        </div>
+      </Card>
+
+      <Card title="Downloads do app">
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Prontos" value={count(appDownloads.done)} />
+            <Stat label="Na fila" value={count(appDownloads.queued)} />
+            <Stat label="Baixando" value={count(appDownloads.running)} />
+            <Stat
+              label="Com erro"
+              value={count(appDownloads.failed)}
+              tone={appDownloads.failed > 0 ? "bad" : "idle"}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Stat
+              label="Espaço ocupado"
+              value={bytes(appDownloads.bytes)}
+              sub={`${count(appDownloads.files)} arquivos`}
+            />
+            <Stat label="Livre no disco" value={bytes(appDownloads.diskFree)} />
+          </div>
+          <Bar value={diskUsage} tone={toneFor(diskUsage, 75, 90)} />
+          <p className="text-[11px] text-muted">
+            <span className="font-mono">{appDownloads.dir}</span>
+            {appDownloads.exists ? "" : " · pasta ainda não criada"}
+          </p>
         </div>
       </Card>
 
