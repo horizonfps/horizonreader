@@ -5,7 +5,15 @@ import { fetchChapterPages, getChapters } from "@/lib/suwayomi";
 import { getScraper } from "@/lib/scrapers";
 import { NATIVE_OFFSET, isNativeChapterId, proxyScraperImage } from "@/lib/scrapers/native";
 import { suwayomiPageUrls } from "@/lib/readerPages";
-import { dedupeByNumber, scanlatorKey } from "@/lib/chapters";
+import { dedupeByNumber, scanlatorKey, type RawChapter } from "@/lib/chapters";
+import {
+  getCachedChapters,
+  setCachedChapters,
+  loadChaptersForLink,
+  refreshChapters,
+  revalidateChapters,
+  type ChapterLink,
+} from "@/lib/chapterCache";
 import { crossSourceNeighbours } from "@/lib/crossSource";
 import Reader from "@/components/Reader";
 
@@ -29,6 +37,9 @@ type ReaderData = {
 type StoredChapter = { urls: string[]; mangaId: number };
 
 const SUWAYOMI_PAGE_PATH = /^\/api\/v1\/manga\/(\d+)\/chapter\//;
+
+// How long a cache miss may hold the reader before it opens without neighbours.
+const CHAPTER_LIST_DEADLINE_MS = 6_000;
 
 // The image service worker is cache-first, so a page seen before the download
 // would be replayed from its pre-download response. A marker keeps the
@@ -131,6 +142,29 @@ async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderD
   };
 }
 
+// Chapter list for prev/next, served from the cache. A miss gets one bounded
+// wait; past it the reader opens with the pages and no neighbours, while the
+// list is fetched in the background for the next visit.
+async function neighbourChapters(link: ChapterLink): Promise<RawChapter[]> {
+  const hit = await getCachedChapters<RawChapter[]>(link);
+  if (hit && Array.isArray(hit.data)) {
+    if (hit.stale) revalidateChapters(link);
+    return hit.data;
+  }
+
+  const fresh = await Promise.race([
+    loadChaptersForLink(link).catch(() => null),
+    new Promise<null>((r) => setTimeout(() => r(null), CHAPTER_LIST_DEADLINE_MS)),
+  ]);
+  if (fresh && fresh.length) {
+    await setCachedChapters(link, fresh);
+    return fresh;
+  }
+
+  void refreshChapters(link);
+  return [];
+}
+
 // Suwayomi chapter: pages fetched from the engine, prev/next from its chapter list.
 async function loadSuwayomi(
   chapterId: number,
@@ -149,20 +183,22 @@ async function loadSuwayomi(
     urls = suwayomiPageUrls(data);
   }
 
+  const link = await prisma.sourceLink.findFirst({
+    where: { sourceMangaId: mangaId },
+    include: { work: true },
+  });
+
   // Navigate within the current chapter's scanlator only, so next/prev advances
   // by number instead of jumping to another scan's upload of the same chapter.
-  const chapters = await getChapters(mangaId).catch(() => []);
+  const chapters: RawChapter[] = link
+    ? await neighbourChapters(link)
+    : await getChapters(mangaId).catch(() => []);
   const current = chapters.find((c) => c.id === chapterId);
   const pool = current
     ? chapters.filter((c) => scanlatorKey(c.scanlator) === scanlatorKey(current.scanlator))
     : chapters;
   const ordered = dedupeByNumber(pool, chapterId).sort((a, b) => a.chapterNumber - b.chapterNumber);
   const idx = ordered.findIndex((c) => c.id === chapterId);
-
-  const link = await prisma.sourceLink.findFirst({
-    where: { sourceMangaId: mangaId },
-    include: { work: true },
-  });
 
   return {
     urls,
