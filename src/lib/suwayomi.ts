@@ -2,6 +2,8 @@
 // Operations verified against Suwayomi-WebUI (src/lib/graphql/**) and the
 // Suwayomi-Server Kotlin resolvers (v2.3.x).
 
+import { withForegroundRead } from "@/lib/backbone/engineGate";
+
 const BASE = process.env.SUWAYOMI_URL || "http://localhost:4567";
 const ENDPOINT = `${BASE}/api/graphql`;
 
@@ -195,7 +197,10 @@ export async function browseSource(
 }
 
 // ---- manga detail + chapters ----
-export async function getManga(id: number): Promise<SuwayomiManga | null> {
+export async function getManga(
+  id: number,
+  opts?: { timeoutMs?: number },
+): Promise<SuwayomiManga | null> {
   const data = await gql<{ manga: SuwayomiManga | null }>(
     `query GetManga($id: Int!) {
       manga(id: $id) {
@@ -206,11 +211,17 @@ export async function getManga(id: number): Promise<SuwayomiManga | null> {
       }
     }`,
     { id },
+    opts?.timeoutMs ?? GQL_TIMEOUT_MS,
   );
   return data.manga;
 }
 
-export async function refreshManga(id: number, fetchManga = true, fetchChapters = true) {
+export async function refreshManga(
+  id: number,
+  fetchManga = true,
+  fetchChapters = true,
+  opts?: { timeoutMs?: number },
+) {
   await gql(
     `mutation RefreshManga($id: Int!, $fetchManga: Boolean!, $fetchChapters: Boolean!) {
       fetchMangaAndChapters(input: { id: $id, fetchManga: $fetchManga, fetchChapters: $fetchChapters }) {
@@ -219,15 +230,27 @@ export async function refreshManga(id: number, fetchManga = true, fetchChapters 
       }
     }`,
     { id, fetchManga, fetchChapters },
+    opts?.timeoutMs ?? GQL_TIMEOUT_MS,
   );
 }
 
-// Get manga detail, populating from the source on first access.
-export async function getMangaEnsured(id: number): Promise<SuwayomiManga | null> {
-  let manga = await getManga(id);
+// Get manga detail, populating from the source on first access. The three
+// engine calls share one budget: chaining three 30s timeouts is what made a
+// cold source take minutes.
+export async function getMangaEnsured(
+  id: number,
+  opts?: { timeoutMs?: number },
+): Promise<SuwayomiManga | null> {
+  const deadline = Date.now() + (opts?.timeoutMs ?? 20_000);
+  const left = () => deadline - Date.now();
+
+  if (left() <= 0) return null;
+  let manga = await getManga(id, { timeoutMs: Math.min(8_000, left()) });
   if (manga && !manga.initialized) {
-    await refreshManga(id, true, true).catch(() => {});
-    manga = await getManga(id);
+    if (left() <= 0) return manga;
+    await refreshManga(id, true, true, { timeoutMs: left() }).catch(() => {});
+    if (left() <= 0) return manga;
+    manga = await getManga(id, { timeoutMs: Math.min(8_000, left()) });
   }
   return manga;
 }
@@ -252,7 +275,10 @@ export async function getMangaSourceIds(ids: number[]): Promise<Map<number, stri
   return out;
 }
 
-export async function getChapters(mangaId: number): Promise<SuwayomiChapter[]> {
+export async function getChapters(
+  mangaId: number,
+  opts?: { timeoutMs?: number },
+): Promise<SuwayomiChapter[]> {
   const data = await gql<{ chapters: { nodes: SuwayomiChapter[] } }>(
     `query GetChapters($condition: ChapterConditionInput, $order: [ChapterOrderInput!]) {
       chapters(condition: $condition, order: $order) {
@@ -260,35 +286,41 @@ export async function getChapters(mangaId: number): Promise<SuwayomiChapter[]> {
       }
     }`,
     { condition: { mangaId }, order: [{ by: "SOURCE_ORDER", byType: "DESC" }] },
+    opts?.timeoutMs ?? GQL_TIMEOUT_MS,
   );
   return data.chapters.nodes;
 }
 
 // ---- reader ----
+// Always someone staring at a loading screen, so it holds a foreground lease.
 export async function fetchChapterPages(
   chapterId: number,
+  opts?: { timeoutMs?: number },
 ): Promise<{ pages: string[]; mangaId: number; pageCount: number; sourceOrder: number }> {
-  const data = await gql<{
-    fetchChapterPages: {
-      pages: string[];
-      chapter: { id: number; pageCount: number; sourceOrder: number; manga: { id: number } };
+  return withForegroundRead(async () => {
+    const data = await gql<{
+      fetchChapterPages: {
+        pages: string[];
+        chapter: { id: number; pageCount: number; sourceOrder: number; manga: { id: number } };
+      };
+    }>(
+      `mutation GetChapterPages($chapterId: Int!) {
+        fetchChapterPages(input: { chapterId: $chapterId }) {
+          pages
+          chapter { id pageCount sourceOrder manga { id } }
+        }
+      }`,
+      { chapterId },
+      opts?.timeoutMs ?? GQL_TIMEOUT_MS,
+    );
+    const c = data.fetchChapterPages.chapter;
+    return {
+      pages: data.fetchChapterPages.pages,
+      mangaId: c.manga.id,
+      pageCount: c.pageCount,
+      sourceOrder: c.sourceOrder,
     };
-  }>(
-    `mutation GetChapterPages($chapterId: Int!) {
-      fetchChapterPages(input: { chapterId: $chapterId }) {
-        pages
-        chapter { id pageCount sourceOrder manga { id } }
-      }
-    }`,
-    { chapterId },
-  );
-  const c = data.fetchChapterPages.chapter;
-  return {
-    pages: data.fetchChapterPages.pages,
-    mangaId: c.manga.id,
-    pageCount: c.pageCount,
-    sourceOrder: c.sourceOrder,
-  };
+  });
 }
 
 // ---- library ----

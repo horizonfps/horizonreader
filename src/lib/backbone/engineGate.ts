@@ -8,17 +8,48 @@
 
 const LIMIT = Math.max(1, Number(process.env.SUWAYOMI_SEARCH_CONCURRENCY || 8));
 
+// While a reader is waiting on screen the sweep gets squeezed down to this, so
+// its searches stop taking every engine worker ahead of the read.
+const FOREGROUND_LIMIT = Math.max(1, Math.floor(LIMIT / 4));
+const LEASE_MAX_MS = 60_000;
+
 type Waiter = { resolve: (granted: boolean) => void; deadline: number; timer: NodeJS.Timeout };
 
 let active = 0;
+let foreground = 0;
 const waiting: Waiter[] = [];
 
+function effectiveLimit(): number {
+  return foreground > 0 ? FOREGROUND_LIMIT : LIMIT;
+}
+
 function pump(): void {
-  while (active < LIMIT && waiting.length) {
+  while (active < effectiveLimit() && waiting.length) {
     const w = waiting.shift()!;
     clearTimeout(w.timer);
     active += 1;
     w.resolve(true);
+  }
+}
+
+// Marks a user-facing engine read as in flight. Holders of a slot are never
+// interrupted; the squeeze only stops new grants.
+export async function withForegroundRead<T>(fn: () => Promise<T>): Promise<T> {
+  foreground += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    foreground -= 1;
+    pump();
+  };
+  const timer = setTimeout(release, LEASE_MAX_MS);
+  timer.unref?.();
+  try {
+    return await fn();
+  } finally {
+    clearTimeout(timer);
+    release();
   }
 }
 
@@ -39,7 +70,7 @@ export function acquireEngineSlot(deadline: number): Promise<EngineSlot | null> 
     };
   };
 
-  if (active < LIMIT) {
+  if (active < effectiveLimit()) {
     active += 1;
     return Promise.resolve(grant());
   }
@@ -61,6 +92,18 @@ export function acquireEngineSlot(deadline: number): Promise<EngineSlot | null> 
   });
 }
 
-export function engineGateSnapshot(): { active: number; waiting: number; limit: number } {
-  return { active, waiting: waiting.length, limit: LIMIT };
+export function engineGateSnapshot(): {
+  active: number;
+  waiting: number;
+  limit: number;
+  foreground: number;
+  effectiveLimit: number;
+} {
+  return {
+    active,
+    waiting: waiting.length,
+    limit: LIMIT,
+    foreground,
+    effectiveLimit: effectiveLimit(),
+  };
 }

@@ -5,6 +5,7 @@
 import { prisma } from "@/lib/db";
 import type { RawChapter } from "@/lib/chapters";
 import { getNativeChapters } from "@/lib/scrapers/native";
+import { withForegroundRead } from "@/lib/backbone/engineGate";
 import { getMangaEnsured, getChapters } from "@/lib/suwayomi";
 
 const MEM_TTL = 30 * 60 * 1000;
@@ -42,24 +43,36 @@ async function dropStaleLink(link: ChapterLink): Promise<void> {
 
 // The real fetch from source, split out so background revalidation loops
 // (other tickets in this round) can call it without going through a page.
-export async function loadChaptersForLink(link: ChapterLink): Promise<RawChapter[]> {
+export async function loadChaptersForLink(
+  link: ChapterLink,
+  opts?: { timeoutMs?: number },
+): Promise<RawChapter[]> {
   if (link.kind === "scraper") {
     return getNativeChapters(link.id).catch(() => []);
   }
-  let manga;
-  try {
-    manga = await getMangaEnsured(link.sourceMangaId);
-  } catch {
-    // Engine unreachable is not evidence the link is wrong; keep it.
-    return [];
-  }
-  const belongsElsewhere =
-    !!link.sourceId && !!manga?.source?.id && manga.source.id !== link.sourceId;
-  if (!manga || belongsElsewhere) {
-    await dropStaleLink(link);
-    return [];
-  }
-  return getChapters(link.sourceMangaId).catch(() => []);
+  const deadline = Date.now() + (opts?.timeoutMs ?? 20_000);
+  return withForegroundRead(async () => {
+    const budget = Math.min(12_000, deadline - Date.now());
+    // An exhausted budget says nothing about the link, so never let it reach
+    // the drop path below.
+    if (budget <= 0) return [];
+    let manga;
+    try {
+      manga = await getMangaEnsured(link.sourceMangaId, { timeoutMs: budget });
+    } catch {
+      // Engine unreachable is not evidence the link is wrong; keep it.
+      return [];
+    }
+    const belongsElsewhere =
+      !!link.sourceId && !!manga?.source?.id && manga.source.id !== link.sourceId;
+    if (!manga || belongsElsewhere) {
+      await dropStaleLink(link);
+      return [];
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) return [];
+    return getChapters(link.sourceMangaId, { timeoutMs: left }).catch(() => []);
+  });
 }
 
 function setMem(key: string, data: unknown, at: number): void {
@@ -124,14 +137,17 @@ export async function bustChapters(links: ChapterLink[]): Promise<void> {
 
 // Loads fresh chapters and updates both cache tiers. Concurrent callers for
 // the same link share one in-flight fetch instead of each paying for one.
-export async function refreshChapters(link: ChapterLink): Promise<void> {
+export async function refreshChapters(
+  link: ChapterLink,
+  opts?: { timeoutMs?: number },
+): Promise<void> {
   const key = chapterCacheKey(link);
   const existing = inFlight.get(key);
   if (existing) return existing;
 
   const task = (async () => {
     try {
-      const data = await loadChaptersForLink(link);
+      const data = await loadChaptersForLink(link, opts);
       if (data.length) await setCachedChapters(link, data);
     } catch {
       // never throw: cache refresh is best-effort
