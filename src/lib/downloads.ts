@@ -15,11 +15,16 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 const SUWAYOMI_IMAGE_PATH = /^\/api\/v1\/manga\/\d+\/(thumbnail|chapter\/\d+\/page\/\d+)(\?.*)?$/;
 
-const ATTEMPTS = 3;
-const RETRY_BASE_MS = 250;
+const ATTEMPTS = 5;
+const RETRY_BASE_MS = 1_000;
+const RETRY_MAX_MS = 30_000;
 const PAGE_TIMEOUT_MS = 20_000;
 const CHAPTER_DEADLINE_MS = 10 * 60_000;
 const PROGRESS_EVERY = 5;
+// Pauses before each extra pass over the pages that failed in a chapter.
+const PASS_PAUSE_MS = [10_000, 30_000];
+const CHAPTER_ATTEMPTS = 3;
+const CHAPTER_RETRY_MS = 5 * 60_000;
 
 export type DownloadItem = {
   chapterId: number;
@@ -70,6 +75,32 @@ async function spendBandwidth(bytes: number, limitBps: number): Promise<void> {
   nextSlotAt = start + (bytes / limitBps) * 1000;
   const wait = start - now;
   if (wait > 0) await sleep(Math.min(wait, 30_000));
+}
+
+// Shared backoff: one page refused by a source pauses every worker, so the
+// queue stops feeding a rate limit it already tripped.
+let cooldownUntil = 0;
+let refusals = 0;
+
+async function waitCooldown(): Promise<void> {
+  const wait = cooldownUntil - Date.now();
+  if (wait > 0) await sleep(wait);
+}
+
+function retryAfterMs(res: Response | null): number {
+  const raw = res?.headers.get("retry-after");
+  const seconds = Number(raw);
+  return raw && Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
+function noteRefusal(res: Response | null): void {
+  refusals += 1;
+  const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.min(refusals - 1, 5));
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + Math.max(backoff, retryAfterMs(res)));
+}
+
+function noteSuccess(): void {
+  refusals = Math.max(0, refusals - 1);
 }
 
 const speedWindow: { at: number; bytes: number }[] = [];
@@ -296,6 +327,7 @@ export async function queueChapterDownloads(
             pagesDone: 0,
             bytes: 0,
             error: null,
+            attempts: 0,
             ...(userId !== null ? { userId } : {}),
             ...(item.name ? { chapterName: item.name } : {}),
             ...(Number.isFinite(Number(item.number)) ? { chapterNumber: Number(item.number) } : {}),
@@ -312,29 +344,33 @@ export async function queueChapterDownloads(
   return { queued, blocked: null };
 }
 
-type PageResult = { bytes: number; ok: boolean };
+// `status` is the last upstream answer, 0 when the request never completed.
+type PageResult = { bytes: number; ok: boolean; status: number };
 
 async function storePage(proxiedUrl: string, limitBps: number): Promise<PageResult> {
   const origin = originTargetFor(proxiedUrl);
-  if (!origin) return { bytes: 0, ok: false };
+  if (!origin) return { bytes: 0, ok: false, status: 0 };
   const { target, referer } = origin;
 
   const already = await getDiskImage(target, "download");
-  if (already) return { bytes: already.body.byteLength, ok: true };
+  if (already) return { bytes: already.body.byteLength, ok: true, status: 200 };
 
   const warm = await getDiskImage(target, "page");
   if (warm) {
     await setDiskImage(target, warm.body, warm.contentType, "download");
-    return { bytes: warm.body.byteLength, ok: true };
+    return { bytes: warm.body.byteLength, ok: true, status: 200 };
   }
 
+  let status = 0;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    await waitCooldown();
     const res = await fetch(target, {
       cache: "no-store",
       redirect: "manual",
       headers: referer ? { "User-Agent": UA, Referer: referer } : undefined,
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
     }).catch(() => null);
+    status = res?.status ?? 0;
 
     if (res && res.status === 200) {
       const body = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
@@ -345,17 +381,29 @@ async function storePage(proxiedUrl: string, limitBps: number): Promise<PageResu
           res.headers.get("content-type") || "application/octet-stream",
           "download",
         );
+        noteSuccess();
         recordBytes(body.byteLength);
         await spendBandwidth(body.byteLength, limitBps);
-        return { bytes: body.byteLength, ok: true };
+        return { bytes: body.byteLength, ok: true, status };
+      }
+    } else if (res) {
+      await res.body?.cancel().catch(() => {});
+      // 4xx other than rate limiting is a real answer; retrying only burns time.
+      if (res.status !== 429 && res.status >= 400 && res.status < 500) {
+        return { bytes: 0, ok: false, status };
       }
     }
-    if (attempt < ATTEMPTS - 1) await sleep(RETRY_BASE_MS * 2 ** attempt);
+    noteRefusal(res);
+    if (attempt < ATTEMPTS - 1) {
+      await sleep(Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** attempt));
+    }
   }
-  return { bytes: 0, ok: false };
+  return { bytes: 0, ok: false, status };
 }
 
-async function downloadChapter(chapterId: number): Promise<void> {
+// A page that failed is retried in later passes instead of sinking the
+// chapter; the chapter only errors when pages are still missing at the end.
+async function downloadChapter(chapterId: number, attempts: number): Promise<void> {
   const started = Date.now();
   const policy = await getPolicy();
   const limitBps = Math.max(0, policy.maxKbps) * 1024;
@@ -363,9 +411,7 @@ async function downloadChapter(chapterId: number): Promise<void> {
 
   const urls = await chapterPageUrls(chapterId, Number.MAX_SAFE_INTEGER);
   if (!urls.length) {
-    await prisma.chapterDownload
-      .update({ where: { chapterId }, data: { status: "ERROR", error: "sem páginas" } })
-      .catch(() => null);
+    await finishChapter(chapterId, attempts, 0, 0, "sem páginas");
     return;
   }
 
@@ -378,48 +424,86 @@ async function downloadChapter(chapterId: number): Promise<void> {
 
   let done = 0;
   let bytes = 0;
-  let failed = false;
   let timedOut = false;
-  let next = 0;
+  let lastStatus = 0;
+  let pending = urls.map((_, i) => i);
 
   const flush = () =>
     prisma.chapterDownload
       .update({ where: { chapterId }, data: { pagesDone: done, bytes } })
       .catch(() => null);
 
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      if (failed || timedOut) return;
-      if (Date.now() - started > CHAPTER_DEADLINE_MS) {
-        timedOut = true;
-        return;
-      }
-      const index = next++;
-      if (index >= urls.length) return;
+  const expired = () => Date.now() - started > CHAPTER_DEADLINE_MS;
 
-      const result = await storePage(urls[index], limitBps);
-      if (!result.ok) {
-        failed = true;
-        return;
-      }
-      done += 1;
-      bytes += result.bytes;
-      if (done % PROGRESS_EVERY === 0) await flush();
+  for (let pass = 0; pass <= PASS_PAUSE_MS.length && pending.length; pass++) {
+    if (pass > 0) {
+      if (expired()) break;
+      await sleep(PASS_PAUSE_MS[pass - 1]);
     }
-  };
+    const queue = pending;
+    const failed: number[] = [];
+    let next = 0;
 
-  await Promise.all(Array.from({ length: Math.min(pageWorkers, urls.length) }, worker));
-  await flush();
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (timedOut) return;
+        if (expired()) {
+          timedOut = true;
+          return;
+        }
+        const slot = next++;
+        if (slot >= queue.length) return;
+        const index = queue[slot];
 
-  const error = timedOut ? "tempo esgotado" : failed ? "página não baixou" : null;
+        const result = await storePage(urls[index], limitBps);
+        if (!result.ok) {
+          failed.push(index);
+          lastStatus = result.status;
+          continue;
+        }
+        done += 1;
+        bytes += result.bytes;
+        if (done % PROGRESS_EVERY === 0) await flush();
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(pageWorkers, queue.length) }, worker));
+    pending = [...failed, ...queue.slice(next)].sort((a, b) => a - b);
+  }
+
+  const error = !pending.length
+    ? null
+    : timedOut
+      ? "tempo esgotado"
+      : `${pending.length} página(s) não baixaram (HTTP ${lastStatus})`;
+  await finishChapter(chapterId, attempts, done, bytes, error);
+}
+
+// A failed chapter goes back to the queue until it runs out of attempts.
+async function finishChapter(
+  chapterId: number,
+  attempts: number,
+  pagesDone: number,
+  bytes: number,
+  error: string | null,
+): Promise<void> {
+  const retry = error !== null && attempts + 1 < CHAPTER_ATTEMPTS;
+  if (error) {
+    console.warn(
+      `[download] chapter ${chapterId}: ${error}; attempt ${attempts + 1}/${CHAPTER_ATTEMPTS}${
+        retry ? ", retrying" : ""
+      }`,
+    );
+  }
   await prisma.chapterDownload
     .update({
       where: { chapterId },
       data: {
-        status: error ? "ERROR" : "DONE",
-        pagesDone: done,
+        status: error ? (retry ? "QUEUED" : "ERROR") : "DONE",
+        attempts: error ? attempts + 1 : attempts,
+        pagesDone,
         bytes,
-        error,
+        error: retry ? null : error,
       },
     })
     .catch(() => null);
@@ -445,10 +529,24 @@ function scheduleRetry(): void {
 async function chapterWorker(): Promise<void> {
   try {
     for (;;) {
+      // Fresh chapters go first; a chapter that just failed waits its turn
+      // before being retried.
       const row = await prisma.chapterDownload
-        .findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } })
+        .findFirst({
+          where: {
+            status: "QUEUED",
+            OR: [{ attempts: 0 }, { updatedAt: { lt: new Date(Date.now() - CHAPTER_RETRY_MS) } }],
+          },
+          orderBy: [{ attempts: "asc" }, { createdAt: "asc" }],
+        })
         .catch(() => null);
-      if (!row) return;
+      if (!row) {
+        const deferred = await prisma.chapterDownload
+          .count({ where: { status: "QUEUED" } })
+          .catch(() => 0);
+        if (deferred > 0) scheduleRetry();
+        return;
+      }
 
       await enforceStorage();
       // A closed gate leaves the row QUEUED and comes back later.
@@ -468,7 +566,7 @@ async function chapterWorker(): Promise<void> {
       if (!claimed || claimed.count !== 1) continue;
 
       try {
-        await downloadChapter(row.chapterId);
+        await downloadChapter(row.chapterId, row.attempts);
       } catch (e) {
         await prisma.chapterDownload
           .update({
