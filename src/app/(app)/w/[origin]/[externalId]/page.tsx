@@ -37,13 +37,9 @@ export default async function RefResolverPage({
     redirect("/work/" + resolved.slug);
   }
   return (
-    <div className="min-h-dvh bg-bg">
-      <main className="mx-auto max-w-app px-4 pb-24 pt-3">
-        <NotFoundView
-          title="Obra indisponível"
-          message="Não conseguimos carregar esta obra agora. Ela pode ter sido removida da fonte."
-        />
-      </main>
-    </div>
+    <NotFoundView
+      title="Obra indisponível"
+      message="Não conseguimos carregar esta obra agora. Ela pode ter sido removida da fonte."
+    />
   );
 }
