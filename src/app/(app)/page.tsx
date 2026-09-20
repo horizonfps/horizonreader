@@ -171,7 +171,7 @@ export default async function HomePage() {
 
       {history.length > 0 ? (
         <section>
-          <SectionHeader title="Continuar lendo" />
+          <SectionHeader title="Continuar lendo" href="/history" />
           <CardRow
             prefetch={false}
             items={history.map((h) => ({
