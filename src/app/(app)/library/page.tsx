@@ -21,7 +21,7 @@ export default async function LibraryPage({
   const favorites = await prisma.favorite
     .findMany({
       where: { userId: session.uid },
-      include: { work: { include: { links: { select: { chapterCount: true } } } } },
+      include: { work: { include: { links: { select: { chapterCount: true, latestNumber: true } } } } },
       orderBy: { updatedAt: "desc" },
     })
     .catch(() => []);
@@ -66,6 +66,7 @@ export default async function LibraryPage({
         lastChapter: l && l.chapter > 0 ? l.chapter : null,
         lastReadAt: l?.at ?? null,
         chapterCount: Math.max(0, ...f.work.links.map((x) => x.chapterCount)),
+        latestNumber: Math.max(0, ...f.work.links.map((x) => x.latestNumber)),
       };
     });
 

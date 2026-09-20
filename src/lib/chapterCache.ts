@@ -106,6 +106,17 @@ export async function getCachedChapters<T>(
   }
 }
 
+// Highest chapter number in a list, so the library can count unread chapters
+// without opening every cached list.
+export function latestChapterNumber(data: unknown[]): number {
+  let max = 0;
+  for (const c of data as { chapterNumber?: number }[]) {
+    const n = c?.chapterNumber;
+    if (typeof n === "number" && Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
+}
+
 export async function setCachedChapters(link: ChapterLink, data: unknown[]): Promise<void> {
   const key = chapterCacheKey(link);
   setMem(key, data, Date.now());
@@ -118,6 +129,12 @@ export async function setCachedChapters(link: ChapterLink, data: unknown[]): Pro
       create: { sourceLinkId: link.id, payload, fetchedAt: new Date() },
       update: { payload, fetchedAt: new Date() },
     });
+    const latestNumber = latestChapterNumber(data);
+    if (latestNumber > 0) {
+      await prisma.sourceLink
+        .update({ where: { id: link.id }, data: { latestNumber } })
+        .catch(() => {});
+    }
   } catch {
     // best-effort: memory tier already has it
   }

@@ -97,6 +97,7 @@ model SourceLink {
   url            String?
   isPrimary      Boolean          @default(false)
   chapterCount   Int              @default(0)
+  latestNumber   Float            @default(0)
   latestAt       DateTime?
   healthScore    Float            @default(0)
   lastSyncedAt   DateTime?

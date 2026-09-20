@@ -21,6 +21,7 @@ export type LibraryItem = {
   lastChapter: number | null;
   lastReadAt: number | null;
   chapterCount: number;
+  latestNumber: number;
 };
 
 type Sort = "recent" | "read" | "title" | "rating";
@@ -37,8 +38,8 @@ const VIEW_KEY = "library:view";
 
 // Chapters past the furthest one read, capped so a rough count never reads as exact.
 function unreadOf(it: LibraryItem): string | null {
-  if (!it.chapterCount || !it.lastChapter) return null;
-  const n = Math.floor(it.chapterCount - it.lastChapter);
+  if (!it.latestNumber || !it.lastChapter) return null;
+  const n = Math.floor(it.latestNumber - it.lastChapter);
   if (n <= 0) return null;
   return n > 99 ? "+99" : String(n);
 }
@@ -184,9 +185,9 @@ export default function LibraryView({
               }}
               caption={
                 it.lastChapter
-                  ? `Cap. ${formatChapterNumber(it.lastChapter)}${it.chapterCount ? ` de ${it.chapterCount}` : ""}`
-                  : it.chapterCount
-                    ? `${it.chapterCount} caps.`
+                  ? `Cap. ${formatChapterNumber(it.lastChapter)}${it.latestNumber ? ` de ${formatChapterNumber(it.latestNumber)}` : ""}`
+                  : it.latestNumber
+                    ? `${formatChapterNumber(it.latestNumber)} caps.`
                     : null
               }
             />
@@ -197,8 +198,8 @@ export default function LibraryView({
           {shown.map((it) => {
             const src = coverProxy(it.coverUrl);
             const pct =
-              it.lastChapter && it.chapterCount
-                ? Math.min(100, Math.round((it.lastChapter / it.chapterCount) * 100))
+              it.lastChapter && it.latestNumber
+                ? Math.min(100, Math.round((it.lastChapter / it.latestNumber) * 100))
                 : null;
             return (
               <li key={it.id} className="border-b border-border/70 last:border-b-0">
@@ -213,7 +214,7 @@ export default function LibraryView({
                     <p className="truncate text-sm font-medium text-text">{it.title}</p>
                     <p className="truncate text-xs text-muted">
                       {[typeLabel(it.type), statusLabel(it.workStatus)].filter(Boolean).join(" · ")}
-                      {it.chapterCount ? ` · ${it.chapterCount} caps.` : ""}
+                      {it.latestNumber ? ` · até o cap. ${formatChapterNumber(it.latestNumber)}` : ""}
                     </p>
                     {pct != null ? (
                       <div className="mt-1.5 h-1 w-full max-w-xs overflow-hidden rounded-full bg-elevated">
