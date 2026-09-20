@@ -159,7 +159,7 @@ export default function ProfileView({
 
       {recent.length > 0 ? (
         <section>
-          <SectionHeader title="Lidos recentemente" />
+          <SectionHeader title="Lidos recentemente" href={actions ? "/history" : undefined} />
           <ul className="grid gap-1 md:grid-cols-2 xl:grid-cols-3">
             {recent.slice(0, 12).map((h) => {
               const w = h.work!;
