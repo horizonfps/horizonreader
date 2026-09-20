@@ -8,6 +8,7 @@ import { attachLocalSlugs } from "@/lib/backbone/localslugs";
 import { indexComickItems } from "@/lib/backbone/prewarm";
 import { formatChapterNumber } from "@/lib/continueReading";
 import { timeAgo } from "@/lib/labels";
+import { stripMarkdown, firstParagraph } from "@/lib/text";
 import type { SectionItem } from "@/lib/backbone/types";
 import WindowTabs from "@/components/WindowTabs";
 import SectionRow from "@/components/SectionRow";
@@ -116,7 +117,7 @@ async function getHeroItems(picks: SectionItem[], popular: SectionItem[]): Promi
       href: `/work/${w.slug}`,
       title: w.title,
       coverUrl: w.coverUrl,
-      description: w.description,
+      description: firstParagraph(stripMarkdown(w.description)) || null,
       genres: parseGenres(w.genres),
       rating: w.rating,
       type: w.type,
