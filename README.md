@@ -12,7 +12,11 @@ own login, per-user library, and reading progress.
 
 ## What you get
 
-- **Mobile-first reader** with per-user library, favorites, reading progress, and
+- **Desktop and mobile UI** in the MangaDex mould: sidebar, instant search,
+  featured carousel, a per-chapter "latest updates" feed, work pages with a
+  banner, source picker by language and a filterable chapter list, and a reader
+  with chapter jump, page width, background and keyboard shortcuts.
+- **Per-user library** with statuses, unread counters, reading progress, and
   public profiles for your friend group.
 - **Multiple sources per title**, ranked by health (chapter count + recency), so when
   one scan site breaks you just tap the next one.

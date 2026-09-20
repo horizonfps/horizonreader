@@ -67,6 +67,16 @@ Instala todas as extensões en / pt-BR / all do repo Keiyoushi, incluindo as
 marcadas como adultas. Uma obra +18 marca a extensão inteira, e pular essas
 custava 77 das 113 fontes pt-BR.
 
+## 1.2 Contador de não lidos na biblioteca
+
+A biblioteca conta os capítulos não lidos pelo último número de capítulo que
+cada fonte devolveu (`SourceLink.latestNumber`), gravado sempre que uma lista
+de capítulos entra no cache. Num banco anterior a esse campo, preencha uma vez:
+
+```
+docker compose exec web npm run backfill-latest-number
+```
+
 ## 2. Cloudflare Tunnel → app
 
 O conector roda como container junto da stack: `CF_TUNNEL_TOKEN` no `.env` e
