@@ -13,7 +13,9 @@ export const runtime = "nodejs";
 // loading every work's chapter list while rendering.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ workId: string }> }) {
   const { workId: raw } = await params;
-  const to = (path: string) => NextResponse.redirect(new URL(path, req.url));
+  // Relative Location: behind the tunnel req.url carries the internal host, so
+  // an absolute redirect sends the browser to localhost.
+  const to = (path: string) => new NextResponse(null, { status: 307, headers: { Location: path } });
 
   const session = await getSession();
   if (!session) return to("/login");
