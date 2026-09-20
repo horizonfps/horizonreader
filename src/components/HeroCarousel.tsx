@@ -53,7 +53,7 @@ export default function HeroCarousel({ items }: { items: HeroItem[] }) {
       <div ref={emblaRef} className="overflow-hidden">
         <div className="flex touch-pan-y">
           {items.map((item, i) => {
-            const src = coverProxy(item.coverUrl);
+            const src = coverProxy(item.coverUrl, "large");
             const meta = [typeLabel(item.type), statusLabel(item.status), item.year]
               .filter(Boolean)
               .join(" · ");

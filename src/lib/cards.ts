@@ -23,10 +23,14 @@ export function backboneToCard(bw: BackboneWork): Card {
 
 // Proxy backbone cover URLs through the app: the browser never talks to
 // MangaDex/Comick directly (privacy) and hotlink/referer checks are avoided.
-export function coverProxy(url?: string | null): string {
+export function coverProxy(url?: string | null, size: "card" | "large" = "card"): string {
   if (!url) return "";
   // App-relative paths pass through; protocol-relative ("//host") must not.
   if (url.startsWith("/") && !url.startsWith("//")) return url;
+  if (size === "large") {
+    const big = url.replace(/\.256\.jpg$/, ".512.jpg");
+    return `/api/cover?u=${encodeURIComponent(big)}&s=l`;
+  }
   return `/api/cover?u=${encodeURIComponent(url)}`;
 }
 

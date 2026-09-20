@@ -22,6 +22,7 @@ const MAX_INPUT_PIXELS = 40_000_000;
 export async function shrinkCover(
   body: Uint8Array,
   contentType: string,
+  width = 360,
 ): Promise<{ body: Uint8Array; contentType: string }> {
   // GIF is skipped so an animated cover keeps its animation.
   if (!contentType.startsWith("image/") || contentType === "image/gif") {
@@ -31,8 +32,8 @@ export async function shrinkCover(
   try {
     const { default: sharp } = await loadSharp();
     const out = await sharp(body, { limitInputPixels: MAX_INPUT_PIXELS, sequentialRead: true })
-      .resize({ width: 360, withoutEnlargement: true })
-      .webp({ quality: 72 })
+      .resize({ width, withoutEnlargement: true })
+      .webp({ quality: width > 360 ? 78 : 72 })
       .toBuffer();
     return { body: new Uint8Array(out), contentType: "image/webp" };
   } catch {

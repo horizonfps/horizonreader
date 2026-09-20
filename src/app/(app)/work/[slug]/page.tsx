@@ -117,7 +117,7 @@ export default async function WorkPage({
   const isAdmin = session?.isAdmin ?? false;
   const isPicked = !!pickRow;
 
-  const cover = coverProxy(work.coverUrl);
+  const cover = coverProxy(work.coverUrl, "large");
   const genres = parseArr(work.genres);
   const alt = altTitle(work.title, parseArr(work.altTitles));
   const description = stripMarkdown(work.description);

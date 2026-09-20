@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const raw = req.nextUrl.searchParams.get("u") || "";
+  const large = req.nextUrl.searchParams.get("s") === "l";
 
   let target: URL;
   try {
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Versioned so a format change here never serves stale bytes from before it.
-  const cacheKey = `cover:v1:${target.toString()}`;
+  const cacheKey = `cover:${large ? "l1" : "v1"}:${target.toString()}`;
   const hit = getCachedImage(cacheKey);
   if (hit) {
     return new NextResponse(new Uint8Array(hit.body), {
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
 
     const upstreamContentType = upstream.headers.get("content-type") || "application/octet-stream";
     const rawBody = new Uint8Array(await upstream.arrayBuffer());
-    const { body, contentType } = await shrinkCover(rawBody, upstreamContentType);
+    const { body, contentType } = await shrinkCover(rawBody, upstreamContentType, large ? 720 : undefined);
 
     setCachedImage(cacheKey, body, contentType);
     void setDiskImage(cacheKey, body, contentType, "cover");
