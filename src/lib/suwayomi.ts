@@ -292,11 +292,41 @@ export async function getChapters(
 }
 
 // ---- reader ----
+type ChapterPages = { pages: string[]; mangaId: number; pageCount: number; sourceOrder: number };
+
+// A page list barely changes once the engine has it, so reopening a chapter
+// within the window skips the engine round-trip.
+const PAGES_TTL_MS = 30 * 60_000;
+const PAGES_MAX = 2_000;
+const pagesCache = new Map<number, { value: ChapterPages; at: number }>();
+
+function rememberPages(chapterId: number, value: ChapterPages): void {
+  if (!value.pageCount && !value.pages.length) return;
+  pagesCache.delete(chapterId);
+  pagesCache.set(chapterId, { value, at: Date.now() });
+  while (pagesCache.size > PAGES_MAX) {
+    const oldest = pagesCache.keys().next().value;
+    if (oldest === undefined) break;
+    pagesCache.delete(oldest);
+  }
+}
+
 // Always someone staring at a loading screen, so it holds a foreground lease.
 export async function fetchChapterPages(
   chapterId: number,
   opts?: { timeoutMs?: number },
-): Promise<{ pages: string[]; mangaId: number; pageCount: number; sourceOrder: number }> {
+): Promise<ChapterPages> {
+  const hit = pagesCache.get(chapterId);
+  if (hit && Date.now() - hit.at < PAGES_TTL_MS) return hit.value;
+  const fresh = await fetchChapterPagesFromEngine(chapterId, opts);
+  rememberPages(chapterId, fresh);
+  return fresh;
+}
+
+async function fetchChapterPagesFromEngine(
+  chapterId: number,
+  opts?: { timeoutMs?: number },
+): Promise<ChapterPages> {
   return withForegroundRead(async () => {
     const data = await gql<{
       fetchChapterPages: {
