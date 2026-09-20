@@ -16,7 +16,7 @@ import SaveOfflineButton from "@/components/SaveOfflineButton";
 import { flushProgress, queueProgress, type PendingProgress } from "@/lib/offlineProgress";
 import { formatChapterNumber } from "@/lib/continueReading";
 
-type Mode = "vertical" | "paged";
+type Mode = "vertical" | "paged" | "double";
 type Dir = "ltr" | "rtl";
 type Width = "fit" | "720" | "960" | "1200" | "full";
 type Bg = "black" | "gray" | "white";
@@ -43,10 +43,20 @@ type Props = {
   downloaded?: boolean;
 };
 
-type Settings = { mode: Mode; dir: Dir; width: Width; gap: number; bg: Bg };
+// offset: the first page stands alone so spreads line up with the print layout.
+type Settings = { mode: Mode; dir: Dir; width: Width; gap: number; bg: Bg; offset: boolean };
 
 const SETTINGS_KEY = "reader:settings";
-const DEFAULT_SETTINGS: Settings = { mode: "vertical", dir: "ltr", width: "960", gap: 0, bg: "black" };
+const DEFAULT_SETTINGS: Settings = {
+  mode: "vertical",
+  dir: "ltr",
+  width: "960",
+  gap: 0,
+  bg: "black",
+  offset: false,
+};
+const MODES: Mode[] = ["vertical", "paged", "double"];
+const SWIPE_MIN_PX = 60;
 const MAX_RETRIES = 4;
 const RETRY_BASE_MS = 500;
 // Pages pulled ahead of the viewport so scrolling doesn't wait on the network.
@@ -96,6 +106,26 @@ function retryUrl(url: string, attempt: number): string {
   return `${url}${url.includes("?") ? "&" : "?"}_r=${attempt}`;
 }
 
+// Two-page spreads; a landscape page is never paired.
+function buildSpreads(total: number, offset: boolean, wide: Set<number>): number[][] {
+  const out: number[][] = [];
+  let i = 0;
+  if (offset && total > 0) {
+    out.push([0]);
+    i = 1;
+  }
+  while (i < total) {
+    if (wide.has(i) || i + 1 >= total || wide.has(i + 1)) {
+      out.push([i]);
+      i += 1;
+    } else {
+      out.push([i, i + 1]);
+      i += 2;
+    }
+  }
+  return out;
+}
+
 function chapterLabel(c: ReaderChapter): string {
   const n = c.number > 0 ? `Cap. ${formatChapterNumber(c.number)}` : "";
   const name = (c.name || "").trim();
@@ -110,6 +140,7 @@ function PageImage({
   url,
   eager,
   onFirstLoad,
+  onDims,
   className,
   wrapperClassName,
   loadingClassName,
@@ -117,6 +148,7 @@ function PageImage({
   url: string;
   eager: boolean;
   onFirstLoad?: () => void;
+  onDims?: (wide: boolean) => void;
   className: string;
   wrapperClassName?: string;
   loadingClassName?: string;
@@ -132,8 +164,10 @@ function PageImage({
     if (loadedRef.current) return;
     loadedRef.current = true;
     setLoaded(true);
+    const el = imageRef.current;
+    if (el && el.naturalWidth > 0) onDims?.(el.naturalWidth > el.naturalHeight);
     onFirstLoad?.();
-  }, [onFirstLoad]);
+  }, [onFirstLoad, onDims]);
 
   useEffect(() => {
     if (imageRef.current?.complete && imageRef.current.naturalWidth > 0) markLoaded();
@@ -217,8 +251,28 @@ export default function Reader({
   const backHref = workSlug ? `/work/${workSlug}` : "/";
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const { mode, dir, width, gap, bg } = settings;
+  const { mode, dir, width, gap, bg, offset: spreadOffset } = settings;
   const [page, setPage] = useState(initialPage);
+  const wideRef = useRef<Set<number>>(new Set());
+  const [wideVersion, setWideVersion] = useState(0);
+
+  const noteWide = useCallback((i: number, wide: boolean) => {
+    const set = wideRef.current;
+    if (wide === set.has(i)) return;
+    if (wide) set.add(i);
+    else set.delete(i);
+    setWideVersion((v) => v + 1);
+  }, []);
+
+  const spreads = useMemo(
+    () => buildSpreads(total, spreadOffset, wideRef.current),
+    // wideVersion is the change signal for the ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [total, spreadOffset, wideVersion],
+  );
+  const spreadIndex = mode === "double" ? Math.max(0, spreads.findIndex((s) => s.includes(page))) : -1;
+  const visiblePages = mode === "double" ? (spreads[spreadIndex] ?? [page]) : [page];
+  const lastVisible = visiblePages[visiblePages.length - 1];
   const [showUI, setShowUI] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
@@ -229,8 +283,9 @@ export default function Reader({
   const wrapRefs = useRef<(HTMLDivElement | null)[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const savedRef = useRef(initialPage);
-  const pageRef = useRef(page);
-  pageRef.current = page;
+  const pageRef = useRef(lastVisible);
+  pageRef.current = lastVisible;
+  const swipeRef = useRef<{ x: number; y: number } | null>(null);
   // Saving is disarmed until the resume scroll settles, so the observer can't
   // overwrite stored progress with a low index while jumping to initialPage.
   const armedRef = useRef(initialPage <= 0);
@@ -252,11 +307,12 @@ export default function Reader({
       if (raw) {
         const s = JSON.parse(raw) as Partial<Settings>;
         setSettings((prev) => ({
-          mode: s.mode === "vertical" || s.mode === "paged" ? s.mode : prev.mode,
+          mode: s.mode && MODES.includes(s.mode) ? s.mode : prev.mode,
           dir: s.dir === "ltr" || s.dir === "rtl" ? s.dir : prev.dir,
           width: s.width && s.width in WIDTH_PX ? s.width : prev.width,
           gap: typeof s.gap === "number" ? s.gap : prev.gap,
           bg: s.bg === "black" || s.bg === "gray" || s.bg === "white" ? s.bg : prev.bg,
+          offset: typeof s.offset === "boolean" ? s.offset : prev.offset,
         }));
       }
     } catch {
@@ -317,13 +373,13 @@ export default function Reader({
   // debounced progress save while reading (only once resume has settled)
   useEffect(() => {
     const t = setTimeout(() => {
-      if (armedRef.current && page !== savedRef.current) {
-        savedRef.current = page;
-        saveProgress(page);
+      if (armedRef.current && lastVisible !== savedRef.current) {
+        savedRef.current = lastVisible;
+        saveProgress(lastVisible);
       }
     }, 800);
     return () => clearTimeout(t);
-  }, [page, saveProgress]);
+  }, [lastVisible, saveProgress]);
 
   // best-effort save on internal navigation (React unmount) and hard unload
   useEffect(() => {
@@ -401,12 +457,13 @@ export default function Reader({
   // Warm the pages just ahead of the viewport so scrolling lands on a decoded
   // image instead of a network round trip.
   useEffect(() => {
-    for (let i = page + 1; i <= page + PRELOAD_AHEAD && i < total; i++) {
+    for (let i = lastVisible + 1; i <= lastVisible + PRELOAD_AHEAD && i < total; i++) {
       const img = new window.Image();
       img.decoding = "async";
+      img.onload = () => noteWide(i, img.naturalWidth > img.naturalHeight);
       img.src = pageUrls[i];
     }
-  }, [page, total, pageUrls]);
+  }, [lastVisible, total, pageUrls, noteWide]);
 
   // Past NEXT_CHAPTER_AT, warm the next chapter's route plus its first pages,
   // so the chapter switch has no black-screen wait.
@@ -436,40 +493,66 @@ export default function Reader({
       .catch(() => {});
   }, [page, total, nextChapterId, router]);
 
+  const spreadsRef = useRef(spreads);
+  spreadsRef.current = spreads;
+
   const goNextPage = useCallback(() => {
     setPage((p) => {
-      if (p >= total - 1) {
+      let next = p + 1;
+      if (mode === "double") {
+        const idx = spreadsRef.current.findIndex((s) => s.includes(p));
+        next = idx >= 0 && idx < spreadsRef.current.length - 1 ? spreadsRef.current[idx + 1][0] : total;
+      }
+      if (next > total - 1) {
         if (nextChapterId) router.push(`/reader/${nextChapterId}`);
         return p;
       }
-      return p + 1;
+      return next;
     });
-  }, [total, nextChapterId, router]);
+  }, [mode, total, nextChapterId, router]);
 
   const goPrevPage = useCallback(() => {
     setPage((p) => {
-      if (p <= 0) {
+      let prev = p - 1;
+      if (mode === "double") {
+        const idx = spreadsRef.current.findIndex((s) => s.includes(p));
+        prev = idx > 0 ? spreadsRef.current[idx - 1][0] : -1;
+      }
+      if (prev < 0) {
         if (prevChapterId) router.push(`/reader/${prevChapterId}`);
         return p;
       }
-      return p - 1;
+      return prev;
     });
-  }, [prevChapterId, router]);
+  }, [mode, prevChapterId, router]);
 
-  // keyboard: pages in paged mode, chapters in vertical mode
+  // The slider picks any page; double mode shows the spread that holds it.
+  const jumpToPage = useCallback(
+    (p: number) => {
+      if (mode !== "double") return setPage(p);
+      const spread = spreadsRef.current.find((s) => s.includes(p));
+      setPage(spread ? spread[0] : p);
+    },
+    [mode],
+  );
+
+  const forward = useCallback(() => (dir === "rtl" ? goPrevPage() : goNextPage()), [dir, goPrevPage, goNextPage]);
+  const backward = useCallback(() => (dir === "rtl" ? goNextPage() : goPrevPage()), [dir, goPrevPage, goNextPage]);
+
+  // keyboard: pages in paged modes, chapters in vertical mode
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (zoomIndex !== null) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
       if (e.key === "ArrowRight") {
-        if (mode === "paged") dir === "rtl" ? goPrevPage() : goNextPage();
+        if (mode !== "vertical") forward();
         else if (nextChapterId) router.push(`/reader/${nextChapterId}`);
       } else if (e.key === "ArrowLeft") {
-        if (mode === "paged") dir === "rtl" ? goNextPage() : goPrevPage();
+        if (mode !== "vertical") backward();
         else if (prevChapterId) router.push(`/reader/${prevChapterId}`);
       } else if (e.key === "m" || e.key === "M") {
-        update({ mode: mode === "vertical" ? "paged" : "vertical" });
+        update({ mode: MODES[(MODES.indexOf(mode) + 1) % MODES.length] });
       } else if (e.key === "h" || e.key === "H") {
         setShowUI((v) => !v);
       } else if (e.key === "Escape") {
@@ -479,7 +562,12 @@ export default function Reader({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, dir, zoomIndex, goNextPage, goPrevPage, nextChapterId, prevChapterId, router, update]);
+  }, [mode, zoomIndex, forward, backward, nextChapterId, prevChapterId, router, update]);
+
+  // Switching into double mode needs the spreads rebuilt from what already loaded.
+  useEffect(() => {
+    if (mode === "double") setWideVersion((v) => v + 1);
+  }, [mode]);
 
   // The bars fade out on their own after a moment of no interaction.
   useEffect(() => {
@@ -596,14 +684,26 @@ export default function Reader({
   function onTapZones(e: React.MouseEvent<HTMLDivElement>) {
     const x = e.clientX;
     const w = window.innerWidth;
-    if (x < w * 0.33) {
-      dir === "rtl" ? goNextPage() : goPrevPage();
-    } else if (x > w * 0.67) {
-      dir === "rtl" ? goPrevPage() : goNextPage();
-    } else {
-      setShowUI((v) => !v);
-    }
+    if (x < w * 0.33) backward();
+    else if (x > w * 0.67) forward();
+    else setShowUI((v) => !v);
   }
+
+  const onSwipeStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length !== 1) return;
+    swipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+
+  const onSwipeEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    const start = swipeRef.current;
+    swipeRef.current = null;
+    if (!start || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0) forward();
+    else backward();
+  };
 
   const chapterTitle = useMemo(() => {
     const n = chapterNumber && chapterNumber > 0 ? `Cap. ${formatChapterNumber(chapterNumber)}` : "";
@@ -613,7 +713,9 @@ export default function Reader({
     return `${n} · ${t}`;
   }, [chapterNumber, title]);
 
-  const progressPct = total > 0 ? ((page + 1) / total) * 100 : 0;
+  const progressPct = total > 0 ? ((lastVisible + 1) / total) * 100 : 0;
+  const pageCounter =
+    visiblePages.length > 1 ? `${visiblePages[0] + 1}-${lastVisible + 1}/${total}` : `${page + 1}/${total}`;
   const light = bg === "white";
 
   if (total === 0) {
@@ -687,15 +789,33 @@ export default function Reader({
           </div>
         </div>
       ) : (
-        <div className="h-full w-full" onClick={onTapZones} onDoubleClick={() => openZoom(page)}>
-          <div className="flex h-full w-full items-center justify-center">
-            <PageImage
-              key={page}
-              url={pageUrls[page]}
-              eager
-              wrapperClassName="flex h-full w-full items-center justify-center"
-              className="max-h-full max-w-full select-none object-contain"
-            />
+        <div
+          className="h-full w-full"
+          onClick={onTapZones}
+          onDoubleClick={() => openZoom(page)}
+          onTouchStart={onSwipeStart}
+          onTouchEnd={onSwipeEnd}
+        >
+          <div
+            className="flex h-full w-full items-center justify-center"
+            style={{ flexDirection: dir === "rtl" && visiblePages.length > 1 ? "row-reverse" : "row" }}
+          >
+            {visiblePages.map((i, k) => {
+              const paired = visiblePages.length > 1;
+              const alignEnd = (k === 0) === (dir === "ltr");
+              return (
+                <PageImage
+                  key={i}
+                  url={pageUrls[i]}
+                  eager
+                  onDims={(wide) => noteWide(i, wide)}
+                  wrapperClassName={`flex h-full items-center ${
+                    paired ? `w-1/2 ${alignEnd ? "justify-end" : "justify-start"}` : "w-full justify-center"
+                  }`}
+                  className="max-h-full max-w-full select-none object-contain"
+                />
+              );
+            })}
           </div>
         </div>
       )}
@@ -811,21 +931,19 @@ export default function Reader({
                 <span className="min-w-0 flex-1 truncate text-center text-xs">{chapterTitle}</span>
               )}
 
-              {mode === "paged" ? (
+              {mode !== "vertical" ? (
                 <input
                   type="range"
                   min={0}
                   max={total - 1}
-                  value={page}
-                  onChange={(e) => setPage(Number(e.target.value))}
+                  value={lastVisible}
+                  onChange={(e) => jumpToPage(Number(e.target.value))}
                   className="hidden w-32 accent-[rgb(var(--accent))] sm:block"
                   dir={dir}
                   aria-label="Página"
                 />
               ) : null}
-              <span className="w-14 shrink-0 text-center text-xs tabular-nums">
-                {page + 1}/{total}
-              </span>
+              <span className="w-16 shrink-0 text-center text-xs tabular-nums">{pageCounter}</span>
 
               {nextChapterId ? (
                 <Link
@@ -872,21 +990,36 @@ export default function Reader({
                 options={[
                   { value: "vertical", label: "Vertical" },
                   { value: "paged", label: "Paginado" },
+                  { value: "double", label: "Dupla" },
                 ]}
               />
             </Field>
 
-            {mode === "paged" ? (
-              <Field label="Direção">
-                <Segmented
-                  value={dir}
-                  onChange={(v) => update({ dir: v as Dir })}
-                  options={[
-                    { value: "ltr", label: "Esquerda → direita" },
-                    { value: "rtl", label: "Direita → esquerda" },
-                  ]}
-                />
-              </Field>
+            {mode !== "vertical" ? (
+              <>
+                <Field label="Direção">
+                  <Segmented
+                    value={dir}
+                    onChange={(v) => update({ dir: v as Dir })}
+                    options={[
+                      { value: "ltr", label: "Esquerda → direita" },
+                      { value: "rtl", label: "Direita → esquerda" },
+                    ]}
+                  />
+                </Field>
+                {mode === "double" ? (
+                  <Field label="Primeira página">
+                    <Segmented
+                      value={spreadOffset ? "alone" : "paired"}
+                      onChange={(v) => update({ offset: v === "alone" })}
+                      options={[
+                        { value: "paired", label: "Em dupla" },
+                        { value: "alone", label: "Sozinha" },
+                      ]}
+                    />
+                  </Field>
+                ) : null}
+              </>
             ) : (
               <>
                 <Field label="Largura">
@@ -925,8 +1058,8 @@ export default function Reader({
 
             <div className="space-y-1 border-t border-border pt-4 text-xs text-muted">
               <p className="mb-1.5 font-medium text-text">Atalhos</p>
-              <p><kbd className="rounded border border-border px-1">←</kbd> <kbd className="rounded border border-border px-1">→</kbd> {mode === "paged" ? "página" : "capítulo"} anterior / seguinte</p>
-              <p><kbd className="rounded border border-border px-1">M</kbd> alterna vertical / paginado</p>
+              <p><kbd className="rounded border border-border px-1">←</kbd> <kbd className="rounded border border-border px-1">→</kbd> {mode === "vertical" ? "capítulo" : "página"} anterior / seguinte</p>
+              <p><kbd className="rounded border border-border px-1">M</kbd> alterna o modo</p>
               <p><kbd className="rounded border border-border px-1">H</kbd> mostra ou esconde os controles</p>
               <p>Duplo clique amplia a página</p>
             </div>
