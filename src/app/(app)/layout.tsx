@@ -17,7 +17,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       where: { id: session.uid },
       select: { username: true, displayName: true, avatarUrl: true, isAdmin: true },
     })
-    .catch(() => null);
+    .catch(() => undefined);
+  // null means the account was removed while its token was still valid.
+  if (user === null) redirect("/api/auth/logout");
 
   const topUser = {
     username: user?.username ?? session.username,
