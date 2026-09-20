@@ -10,12 +10,14 @@ export default function MangaCard({
   caption,
   priority,
   href,
+  badge,
 }: {
   item: Card;
   showTitle?: boolean;
   caption?: string | null;
   priority?: boolean;
   href?: string;
+  badge?: string | null;
 }) {
   const src = coverProxy(item.coverUrl);
   return (
@@ -33,6 +35,11 @@ export default function MangaCard({
           />
         ) : null}
         <RatingBadge rating={item.rating} />
+        {badge ? (
+          <span className="absolute left-1 top-1 rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-on-accent">
+            {badge}
+          </span>
+        ) : null}
         {item.type ? (
           <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-text backdrop-blur">
             {typeLabel(item.type)}

@@ -35,6 +35,14 @@ const SORT_LABEL: Record<Sort, string> = {
 
 const VIEW_KEY = "library:view";
 
+// Chapters past the furthest one read, capped so a rough count never reads as exact.
+function unreadOf(it: LibraryItem): string | null {
+  if (!it.chapterCount || !it.lastChapter) return null;
+  const n = Math.floor(it.chapterCount - it.lastChapter);
+  if (n <= 0) return null;
+  return n > 99 ? "+99" : String(n);
+}
+
 export default function LibraryView({
   items,
   initialStatus,
@@ -164,6 +172,7 @@ export default function LibraryView({
               key={it.id}
               priority={i < 6}
               href={`/work/${it.slug}`}
+              badge={unreadOf(it)}
               item={{
                 origin: "mangadex",
                 externalId: "",
