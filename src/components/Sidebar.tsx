@@ -17,21 +17,28 @@ export default function Sidebar({ isAdmin }: { isAdmin: boolean }) {
       </Link>
       <nav className="mt-2 flex-1 px-3">
         <ul className="space-y-0.5">
-          {items.map(({ href, label, Icon }) => {
+          {items.map(({ href, label, Icon, plain }) => {
             const active = isNavActive(href, pathname);
+            const className = `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
+              active ? "bg-accent/15 font-medium text-accent" : "text-muted hover:bg-elevated hover:text-text"
+            }`;
+            const body = (
+              <>
+                <Icon className="h-[18px] w-[18px]" strokeWidth={active ? 2.2 : 1.8} />
+                {label}
+              </>
+            );
             return (
               <li key={href}>
-                <Link
-                  href={href}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
-                    active
-                      ? "bg-accent/15 font-medium text-accent"
-                      : "text-muted hover:bg-elevated hover:text-text"
-                  }`}
-                >
-                  <Icon className="h-[18px] w-[18px]" strokeWidth={active ? 2.2 : 1.8} />
-                  {label}
-                </Link>
+                {plain ? (
+                  <a href={href} className={className}>
+                    {body}
+                  </a>
+                ) : (
+                  <Link href={href} className={className}>
+                    {body}
+                  </Link>
+                )}
               </li>
             );
           })}

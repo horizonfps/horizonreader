@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NAV_ITEMS, isNavActive } from "@/lib/nav";
 
-const items = NAV_ITEMS.filter((i) => !i.adminOnly);
+const items = NAV_ITEMS.filter((i) => !i.adminOnly && !i.desktopOnly);
 
 export default function BottomNav() {
   const pathname = usePathname();
