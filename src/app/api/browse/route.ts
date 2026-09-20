@@ -19,6 +19,8 @@ const LANG_BY_TYPE: Record<string, string> = {
   manhua: "zh",
 };
 
+const STATUSES = new Set(["ongoing", "completed", "hiatus", "cancelled"]);
+
 const ORDER_BY_SORT: Record<string, Record<string, "asc" | "desc">> = {
   popular: { followedCount: "desc" },
   latest: { latestUploadedChapter: "desc" },
@@ -34,6 +36,7 @@ export async function GET(req: Request) {
   const type = sp.get("type") || "";
   const genre = sp.get("genre") || "";
   const sort = sp.get("sort") || "popular";
+  const status = sp.get("status") || "";
 
   const raw = sp.get("cursor");
   let offset = raw ? Number(raw) : 0;
@@ -49,6 +52,7 @@ export async function GET(req: Request) {
       order,
       originalLanguage: lang ? [lang] : undefined,
       includedTags: tagId ? [tagId] : undefined,
+      status: STATUSES.has(status) ? [status] : undefined,
       limit: PAGE,
       offset,
     });
