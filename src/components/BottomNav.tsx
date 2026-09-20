@@ -2,28 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Compass, Search, Bookmark, Download, User } from "lucide-react";
+import { NAV_ITEMS, isNavActive } from "@/lib/nav";
 
-const items = [
-  { href: "/", label: "Home", Icon: Home },
-  { href: "/browse", label: "Browse", Icon: Compass },
-  { href: "/search", label: "Search", Icon: Search },
-  { href: "/library", label: "Library", Icon: Bookmark },
-  { href: "/downloads", label: "Downloads", Icon: Download },
-  { href: "/profile", label: "Profile", Icon: User },
-];
+const items = NAV_ITEMS.filter((i) => !i.adminOnly);
 
 export default function BottomNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur">
+    <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 backdrop-blur lg:hidden">
       <ul
         className="mx-auto flex max-w-app"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {items.map(({ href, label, Icon }) => {
-          const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+          const active = isNavActive(href, pathname);
           return (
             <li key={href} className="flex-1">
               <Link
@@ -32,7 +25,7 @@ export default function BottomNav() {
                   active ? "text-accent" : "text-muted"
                 }`}
               >
-                <Icon className="h-5 w-5" />
+                <Icon className="h-5 w-5" strokeWidth={active ? 2.2 : 1.8} />
                 <span>{label}</span>
               </Link>
             </li>

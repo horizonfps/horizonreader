@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from "next";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
 export const metadata: Metadata = {
-  title: "HorizonReader",
+  title: { default: "HorizonReader", template: "%s · HorizonReader" },
   description: "A private reading library.",
   robots: { index: false, follow: false },
   icons: { icon: "/icon.png", apple: "/icon.png" },

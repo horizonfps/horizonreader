@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
+import { prisma } from "@/lib/db";
 import TopBar from "@/components/TopBar";
+import Sidebar from "@/components/Sidebar";
 import BottomNav from "@/components/BottomNav";
 import OfflineSync from "@/components/OfflineSync";
 
@@ -10,10 +12,27 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getSession();
   if (!session) redirect("/login");
 
+  const user = await prisma.user
+    .findUnique({
+      where: { id: session.uid },
+      select: { username: true, displayName: true, avatarUrl: true, isAdmin: true },
+    })
+    .catch(() => null);
+
+  const topUser = {
+    username: user?.username ?? session.username,
+    displayName: user?.displayName ?? null,
+    avatarUrl: user?.avatarUrl ?? null,
+    isAdmin: user?.isAdmin ?? session.isAdmin,
+  };
+
   return (
     <div className="min-h-dvh bg-bg">
-      <TopBar />
-      <main className="mx-auto max-w-app px-4 pb-24 pt-3">{children}</main>
+      <Sidebar isAdmin={topUser.isAdmin} />
+      <TopBar user={topUser} />
+      <div className="lg:pl-60">
+        <main className="mx-auto max-w-app px-4 pb-24 pt-4 lg:pb-10">{children}</main>
+      </div>
       <BottomNav />
       <OfflineSync />
     </div>
