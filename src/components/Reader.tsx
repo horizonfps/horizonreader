@@ -251,8 +251,18 @@ export default function Reader({
   const backHref = workSlug ? `/work/${workSlug}` : "/";
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const { mode, dir, width, gap, bg, offset: spreadOffset } = settings;
+  const { mode: chosenMode, dir, width, gap, bg, offset: spreadOffset } = settings;
+  const [landscape, setLandscape] = useState(true);
+  // A portrait screen has no room for a spread; double falls back to single pages.
+  const mode: Mode = chosenMode === "double" && !landscape ? "paged" : chosenMode;
   const [page, setPage] = useState(initialPage);
+
+  useEffect(() => {
+    const check = () => setLandscape(window.innerWidth > window.innerHeight);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
   const wideRef = useRef<Set<number>>(new Set());
   const [wideVersion, setWideVersion] = useState(0);
 
@@ -552,7 +562,18 @@ export default function Reader({
         if (mode !== "vertical") backward();
         else if (prevChapterId) router.push(`/reader/${prevChapterId}`);
       } else if (e.key === "m" || e.key === "M") {
-        update({ mode: MODES[(MODES.indexOf(mode) + 1) % MODES.length] });
+        update({ mode: MODES[(MODES.indexOf(chosenMode) + 1) % MODES.length] });
+      } else if (mode === "vertical" && containerRef.current) {
+        const el = containerRef.current;
+        const step = el.clientHeight * 0.85;
+        if (e.key === " " || e.key === "PageDown") el.scrollBy({ top: e.shiftKey ? -step : step, behavior: "smooth" });
+        else if (e.key === "PageUp") el.scrollBy({ top: -step, behavior: "smooth" });
+        else if (e.key === "ArrowDown") el.scrollBy({ top: 120 });
+        else if (e.key === "ArrowUp") el.scrollBy({ top: -120 });
+        else if (e.key === "Home") el.scrollTo({ top: 0 });
+        else if (e.key === "End") el.scrollTo({ top: el.scrollHeight });
+        else return;
+        e.preventDefault();
       } else if (e.key === "h" || e.key === "H") {
         setShowUI((v) => !v);
       } else if (e.key === "Escape") {
@@ -562,7 +583,7 @@ export default function Reader({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, zoomIndex, forward, backward, nextChapterId, prevChapterId, router, update]);
+  }, [mode, chosenMode, zoomIndex, forward, backward, nextChapterId, prevChapterId, router, update]);
 
   // Switching into double mode needs the spreads rebuilt from what already loaded.
   useEffect(() => {
@@ -985,7 +1006,7 @@ export default function Reader({
 
             <Field label="Modo">
               <Segmented
-                value={mode}
+                value={chosenMode}
                 onChange={(v) => update({ mode: v as Mode })}
                 options={[
                   { value: "vertical", label: "Vertical" },
@@ -995,7 +1016,7 @@ export default function Reader({
               />
             </Field>
 
-            {mode !== "vertical" ? (
+            {chosenMode !== "vertical" ? (
               <>
                 <Field label="Direção">
                   <Segmented
@@ -1007,7 +1028,7 @@ export default function Reader({
                     ]}
                   />
                 </Field>
-                {mode === "double" ? (
+                {chosenMode === "double" ? (
                   <Field label="Primeira página">
                     <Segmented
                       value={spreadOffset ? "alone" : "paired"}
@@ -1059,6 +1080,7 @@ export default function Reader({
             <div className="space-y-1 border-t border-border pt-4 text-xs text-muted">
               <p className="mb-1.5 font-medium text-text">Atalhos</p>
               <p><kbd className="rounded border border-border px-1">←</kbd> <kbd className="rounded border border-border px-1">→</kbd> {mode === "vertical" ? "capítulo" : "página"} anterior / seguinte</p>
+              {mode === "vertical" ? <p><kbd className="rounded border border-border px-1">Espaço</kbd> rola uma tela</p> : null}
               <p><kbd className="rounded border border-border px-1">M</kbd> alterna o modo</p>
               <p><kbd className="rounded border border-border px-1">H</kbd> mostra ou esconde os controles</p>
               <p>Duplo clique amplia a página</p>
