@@ -1,7 +1,7 @@
 // Browse grid: filter MangaDex by type/genre with sort, infinite offset cursor.
 
 import { getSession } from "@/lib/session";
-import { listMangaDex } from "@/lib/backbone/mangadex";
+import { listMangaDex, getMangaDexStatistics } from "@/lib/backbone/mangadex";
 import { resolveGenreTag } from "@/lib/backbone/tags";
 import { isBlocked } from "@/lib/backbone/filter";
 import { backboneToCard } from "@/lib/cards";
@@ -56,6 +56,16 @@ export async function GET(req: Request) {
       limit: PAGE,
       offset,
     });
+    const stats = await getMangaDexStatistics(works.map((w) => w.externalId)).catch(
+      () => ({}) as Awaited<ReturnType<typeof getMangaDexStatistics>>,
+    );
+    for (const w of works) {
+      const st = stats[w.externalId];
+      if (st) {
+        w.rating = st.rating ?? w.rating ?? null;
+        w.follows = st.follows ?? w.follows ?? null;
+      }
+    }
     const items = works
       .map(backboneToCard)
       .filter((c) => !isBlocked({ genres: c.genres, contentRating: c.contentRating }));
