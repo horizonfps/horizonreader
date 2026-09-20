@@ -51,6 +51,7 @@ function ttlFor(path: string): number {
   if (path.startsWith("/statistics/manga")) return 60 * 60_000;
   if (path.includes("/aggregate")) return 6 * 3_600_000;
   if (path.startsWith("/manga/")) return 12 * 3_600_000;
+  if (path.startsWith("/chapter?")) return 5 * 60_000;
   return 30 * 60_000;
 }
 
