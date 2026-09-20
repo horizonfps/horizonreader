@@ -11,6 +11,7 @@ const MAX_WORKS = 40;
 export const LATEST_PAGE_MAX = 10;
 const MAX_CHAPTERS_PER_WORK = 3;
 export const LATEST_LANGS = ["pt-br", "en"];
+export type LatestLang = "all" | "pt-br" | "en";
 
 export type LatestChapter = {
   id: string;
@@ -72,18 +73,18 @@ function statusOf(s?: string | null): SectionItem["status"] {
   return null;
 }
 
-const caches = new Map<number, { data: LatestUpdate[]; at: number }>();
+const caches = new Map<string, { data: LatestUpdate[]; at: number }>();
 const TTL = 5 * 60_000;
-const inFlight = new Map<number, Promise<LatestUpdate[]>>();
+const inFlight = new Map<string, Promise<LatestUpdate[]>>();
 
-async function build(page: number): Promise<LatestUpdate[]> {
+async function build(page: number, lang: LatestLang): Promise<LatestUpdate[]> {
   const qs = new URLSearchParams();
   qs.set("limit", String(FEED_LIMIT));
   if (page > 0) qs.set("offset", String(page * FEED_LIMIT));
   qs.set("order[readableAt]", "desc");
   qs.append("includes[]", "manga");
   qs.append("includes[]", "scanlation_group");
-  for (const l of LATEST_LANGS) qs.append("translatedLanguage[]", l);
+  for (const l of lang === "all" ? LATEST_LANGS : [lang]) qs.append("translatedLanguage[]", l);
   for (const r of ["safe", "suggestive"]) qs.append("contentRating[]", r);
   const d = await mdxJson<{ data?: MdxChapter[] }>(`/chapter?${qs.toString()}`);
   const rows = d?.data ?? [];
@@ -154,21 +155,22 @@ async function build(page: number): Promise<LatestUpdate[]> {
   return list;
 }
 
-export async function getLatestUpdates(page = 0): Promise<LatestUpdate[]> {
+export async function getLatestUpdates(page = 0, lang: LatestLang = "all"): Promise<LatestUpdate[]> {
+  const key = `${lang}:${page}`;
   const now = Date.now();
-  const cache = caches.get(page);
+  const cache = caches.get(key);
   if (cache && now - cache.at < TTL) return cache.data;
-  const running = inFlight.get(page);
+  const running = inFlight.get(key);
   if (running) return cache?.data ?? running;
-  const p = build(page)
+  const p = build(page, lang)
     .then((data) => {
-      if (data.length) caches.set(page, { data, at: Date.now() });
-      return caches.get(page)?.data ?? data;
+      if (data.length) caches.set(key, { data, at: Date.now() });
+      return caches.get(key)?.data ?? data;
     })
-    .catch(() => caches.get(page)?.data ?? [])
+    .catch(() => caches.get(key)?.data ?? [])
     .finally(() => {
-      inFlight.delete(page);
+      inFlight.delete(key);
     });
-  inFlight.set(page, p);
+  inFlight.set(key, p);
   return cache?.data ?? p;
 }
