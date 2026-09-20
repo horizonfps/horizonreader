@@ -213,7 +213,7 @@ export default async function HomePage() {
 
       {latest.length > 0 ? (
         <section>
-          <SectionHeader title="Últimas atualizações" href="/browse?sort=latest" />
+          <SectionHeader title="Últimas atualizações" href="/updates" />
           <LatestUpdates updates={latest} now={now} />
         </section>
       ) : null}

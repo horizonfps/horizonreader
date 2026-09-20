@@ -8,6 +8,7 @@ import { originLangToType, type SectionItem } from "@/lib/backbone/types";
 const COVERS = "https://uploads.mangadex.org/covers";
 const FEED_LIMIT = 100;
 const MAX_WORKS = 40;
+export const LATEST_PAGE_MAX = 10;
 const MAX_CHAPTERS_PER_WORK = 3;
 export const LATEST_LANGS = ["pt-br", "en"];
 
@@ -71,13 +72,14 @@ function statusOf(s?: string | null): SectionItem["status"] {
   return null;
 }
 
-let cache: { data: LatestUpdate[]; at: number } | null = null;
+const caches = new Map<number, { data: LatestUpdate[]; at: number }>();
 const TTL = 5 * 60_000;
-let inFlight: Promise<LatestUpdate[]> | null = null;
+const inFlight = new Map<number, Promise<LatestUpdate[]>>();
 
-async function build(): Promise<LatestUpdate[]> {
+async function build(page: number): Promise<LatestUpdate[]> {
   const qs = new URLSearchParams();
   qs.set("limit", String(FEED_LIMIT));
+  if (page > 0) qs.set("offset", String(page * FEED_LIMIT));
   qs.set("order[readableAt]", "desc");
   qs.append("includes[]", "manga");
   qs.append("includes[]", "scanlation_group");
@@ -152,18 +154,21 @@ async function build(): Promise<LatestUpdate[]> {
   return list;
 }
 
-export async function getLatestUpdates(): Promise<LatestUpdate[]> {
+export async function getLatestUpdates(page = 0): Promise<LatestUpdate[]> {
   const now = Date.now();
+  const cache = caches.get(page);
   if (cache && now - cache.at < TTL) return cache.data;
-  if (inFlight) return cache?.data ?? inFlight;
-  inFlight = build()
+  const running = inFlight.get(page);
+  if (running) return cache?.data ?? running;
+  const p = build(page)
     .then((data) => {
-      if (data.length) cache = { data, at: Date.now() };
-      return cache?.data ?? data;
+      if (data.length) caches.set(page, { data, at: Date.now() });
+      return caches.get(page)?.data ?? data;
     })
-    .catch(() => cache?.data ?? [])
+    .catch(() => caches.get(page)?.data ?? [])
     .finally(() => {
-      inFlight = null;
+      inFlight.delete(page);
     });
-  return cache?.data ?? inFlight;
+  inFlight.set(page, p);
+  return cache?.data ?? p;
 }
