@@ -9,6 +9,8 @@ import {
   Settings2,
   X,
   Maximize2,
+  Expand,
+  Shrink,
   List,
   ArrowLeft,
 } from "lucide-react";
@@ -286,6 +288,18 @@ export default function Reader({
   const [showUI, setShowUI] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [zoomIndex, setZoomIndex] = useState<number | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const sync = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    else void document.documentElement.requestFullscreen().catch(() => {});
+  }, []);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
 
@@ -576,6 +590,8 @@ export default function Reader({
         e.preventDefault();
       } else if (e.key === "h" || e.key === "H") {
         setShowUI((v) => !v);
+      } else if (e.key === "f" || e.key === "F") {
+        toggleFullscreen();
       } else if (e.key === "Escape") {
         setSettingsOpen(false);
         setShowUI(false);
@@ -583,7 +599,7 @@ export default function Reader({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, chosenMode, zoomIndex, forward, backward, nextChapterId, prevChapterId, router, update]);
+  }, [mode, chosenMode, zoomIndex, forward, backward, nextChapterId, prevChapterId, router, update, toggleFullscreen]);
 
   // Switching into double mode needs the spreads rebuilt from what already loaded.
   useEffect(() => {
@@ -908,6 +924,13 @@ export default function Reader({
               <Maximize2 className="h-4 w-4" />
             </button>
             <button
+              onClick={toggleFullscreen}
+              aria-label={fullscreen ? "Sair da tela cheia" : "Tela cheia"}
+              className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10 sm:flex"
+            >
+              {fullscreen ? <Shrink className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+            </button>
+            <button
               onClick={() => setSettingsOpen((v) => !v)}
               aria-label="Ajustes"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10"
@@ -1083,6 +1106,7 @@ export default function Reader({
               {mode === "vertical" ? <p><kbd className="rounded border border-border px-1">Espaço</kbd> rola uma tela</p> : null}
               <p><kbd className="rounded border border-border px-1">M</kbd> alterna o modo</p>
               <p><kbd className="rounded border border-border px-1">H</kbd> mostra ou esconde os controles</p>
+              <p><kbd className="rounded border border-border px-1">F</kbd> tela cheia</p>
               <p>Duplo clique amplia a página</p>
             </div>
           </div>
