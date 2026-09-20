@@ -18,6 +18,7 @@ import HorizonPickButton from "@/components/HorizonPickButton";
 import ChapterBrowser from "@/components/ChapterBrowser";
 import ResolvingSources from "@/components/ResolvingSources";
 import Description from "@/components/Description";
+import ShareButton from "@/components/ShareButton";
 import SectionRow from "@/components/SectionRow";
 
 export const dynamic = "force-dynamic";
@@ -212,6 +213,7 @@ export default async function WorkPage({
               <FavoriteButton workId={work.id} initialStatus={favStatus} />
               {isAdmin ? <HorizonPickButton workId={work.id} initialPicked={isPicked} /> : null}
               <RefreshSourcesButton workId={work.id} />
+              <ShareButton title={work.title} path={`/work/${encodeURIComponent(work.slug)}`} />
             </div>
           </div>
         </div>
@@ -219,6 +221,7 @@ export default async function WorkPage({
           <FavoriteButton workId={work.id} initialStatus={favStatus} />
           {isAdmin ? <HorizonPickButton workId={work.id} initialPicked={isPicked} /> : null}
           <RefreshSourcesButton workId={work.id} />
+          <ShareButton title={work.title} path={`/work/${encodeURIComponent(work.slug)}`} />
         </div>
         {genres.length > 0 ? (
           <div className="mt-4 flex flex-wrap gap-1.5">
