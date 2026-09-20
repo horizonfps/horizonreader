@@ -2,47 +2,12 @@
 
 import { useEffect, useRef } from "react";
 import useSWRInfinite from "swr/infinite";
-import { Star } from "lucide-react";
-import { coverProxy, workHref, type Card } from "@/lib/cards";
-import PrefetchLink from "@/components/PrefetchLink";
+import type { Card } from "@/lib/cards";
+import MangaCard from "@/components/MangaCard";
 
 type Page = { items: Card[]; nextCursor: number | null };
 
 const fetcher = (url: string): Promise<Page> => fetch(url).then((r) => r.json());
-
-function MangaCard({ item, index }: { item: Card; index: number }) {
-  const src = coverProxy(item.coverUrl);
-  const priority = index < 4;
-  return (
-    <PrefetchLink href={workHref(item)} className="block">
-      <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
-        {src ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={src}
-            alt=""
-            loading={priority ? "eager" : "lazy"}
-            fetchPriority={priority ? "high" : undefined}
-            draggable={false}
-            className="cover-img h-full w-full object-cover"
-          />
-        ) : null}
-        {item.rating != null ? (
-          <span className="absolute right-1 top-1 flex items-center gap-0.5 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium backdrop-blur">
-            <Star className="h-3 w-3 fill-accent text-accent" />
-            {item.rating.toFixed(1)}
-          </span>
-        ) : null}
-        {item.type ? (
-          <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-medium capitalize backdrop-blur">
-            {item.type}
-          </span>
-        ) : null}
-      </div>
-      <p className="mt-1 line-clamp-2 text-xs leading-tight text-text">{item.title}</p>
-    </PrefetchLink>
-  );
-}
 
 export default function InfiniteGrid({
   endpoint,
@@ -92,12 +57,12 @@ export default function InfiniteGrid({
 
   return (
     <div>
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8">
         {items.map((item, i) => {
           const key = `${item.origin}:${item.externalId}`;
           if (seen.has(key)) return null;
           seen.add(key);
-          return <MangaCard key={key} item={item} index={i} />;
+          return <MangaCard key={key} item={item} priority={i < 6} />;
         })}
       </div>
 

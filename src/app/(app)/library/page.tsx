@@ -1,10 +1,11 @@
-import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
-import { coverProxy, STATUS_ORDER, STATUS_LABELS, type FavStatus } from "@/lib/cards";
-import RatingBadge from "@/components/RatingBadge";
+import { STATUS_ORDER, type FavStatus } from "@/lib/cards";
+import LibraryView, { type LibraryItem } from "@/components/LibraryView";
 
 export const dynamic = "force-dynamic";
+
+export const metadata = { title: "Biblioteca" };
 
 export default async function LibraryPage({
   searchParams,
@@ -20,75 +21,53 @@ export default async function LibraryPage({
   const favorites = await prisma.favorite
     .findMany({
       where: { userId: session.uid },
-      include: { work: true },
+      include: { work: { include: { links: { select: { chapterCount: true } } } } },
       orderBy: { updatedAt: "desc" },
     })
     .catch(() => []);
 
-  const shown = active ? favorites.filter((f) => f.status === active) : favorites;
+  const workIds = favorites.map((f) => f.workId);
+  const progress = workIds.length
+    ? await prisma.progress
+        .findMany({
+          where: { userId: session.uid, workId: { in: workIds } },
+          select: { workId: true, chapterNumber: true, updatedAt: true },
+        })
+        .catch(() => [])
+    : [];
+  const last = new Map<number, { chapter: number; at: number }>();
+  for (const p of progress) {
+    if (p.workId == null) continue;
+    const cur = last.get(p.workId);
+    const at = p.updatedAt.getTime();
+    if (!cur) last.set(p.workId, { chapter: p.chapterNumber, at });
+    else {
+      last.set(p.workId, {
+        chapter: Math.max(cur.chapter, p.chapterNumber),
+        at: Math.max(cur.at, at),
+      });
+    }
+  }
 
-  const chipClass = (isActive: boolean) =>
-    `shrink-0 rounded-full border px-3 py-1 text-xs font-medium ${
-      isActive
-        ? "border-accent bg-accent text-on-accent"
-        : "border-border bg-surface text-muted hover:bg-elevated"
-    }`;
+  const items: LibraryItem[] = favorites
+    .filter((f) => f.work)
+    .map((f) => {
+      const l = last.get(f.workId);
+      return {
+        id: f.id,
+        status: f.status,
+        updatedAt: f.updatedAt.getTime(),
+        slug: f.work.slug,
+        title: f.work.title,
+        coverUrl: f.work.coverUrl,
+        rating: f.work.rating,
+        type: f.work.type,
+        workStatus: f.work.status,
+        lastChapter: l && l.chapter > 0 ? l.chapter : null,
+        lastReadAt: l?.at ?? null,
+        chapterCount: Math.max(0, ...f.work.links.map((x) => x.chapterCount)),
+      };
+    });
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <h1 className="text-lg font-semibold">Biblioteca</h1>
-        <span className="text-xs text-muted">{shown.length} título(s)</span>
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        <Link href="/library" className={chipClass(active === null)}>
-          Todos
-        </Link>
-        {STATUS_ORDER.map((key) => (
-          <Link key={key} href={`/library?status=${key}`} className={chipClass(active === key)}>
-            {STATUS_LABELS[key]}
-          </Link>
-        ))}
-      </div>
-
-      {shown.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-20 text-center">
-          <p className="text-sm text-muted">Nada aqui ainda.</p>
-          <Link
-            href="/browse"
-            className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-on-accent hover:bg-accent-hover"
-          >
-            Explorar
-          </Link>
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7">
-          {shown.map((fav) => {
-            const work = fav.work;
-            if (!work) return null;
-            const src = coverProxy(work.coverUrl);
-            return (
-              <Link key={fav.id} href={`/work/${work.slug}`} className="block">
-                <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface">
-                  {src ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={src}
-                      alt=""
-                      loading="lazy"
-                      draggable={false}
-                      className="cover-img h-full w-full object-cover"
-                    />
-                  ) : null}
-                  <RatingBadge rating={work.rating} />
-                </div>
-                <p className="mt-1 line-clamp-2 text-xs leading-tight text-text">{work.title}</p>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  return <LibraryView items={items} initialStatus={active} />;
 }
