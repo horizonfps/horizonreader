@@ -17,7 +17,8 @@ export default function LoginPage() {
             className="h-full w-full object-cover"
           />
         </div>
-        <div className="mt-8">
+        <h1 className="mt-6 text-center text-lg font-semibold tracking-tight">HorizonReader</h1>
+        <div className="mt-6">
           <Suspense>
             <LoginForm />
           </Suspense>
