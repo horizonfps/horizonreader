@@ -25,12 +25,20 @@ services:
       # Chapter pages are immutable, so they are served from disk after the
       # first fetch. Sized for the local server, not a VPS.
       IMAGE_CACHE_DIR: /data/imgcache
-      IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-8192}
-      IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-512}
+      IMAGE_CACHE_DISK_MB: ${IMAGE_CACHE_DISK_MB:-40960}
+      IMAGE_CACHE_MEM_MB: ${IMAGE_CACHE_MEM_MB:-2048}
+      COVER_CACHE_DISK_MB: ${COVER_CACHE_DISK_MB:-4096}
+      BACKBONE_CACHE_MEM_MB: ${BACKBONE_CACHE_MEM_MB:-256}
+      # Image buffers live outside the V8 heap, so this only needs to cover
+      # the app itself plus the JSON caches.
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=4096}
+      # Background warm of the next unread chapter of every favorite.
+      PAGE_WARM_PAGES: ${PAGE_WARM_PAGES:-8}
+      PAGE_WARM_MAX_WORKS: ${PAGE_WARM_MAX_WORKS:-40}
       # Each concurrent solve is one browser context, so this matches
       # trawl's own BROWSER_POOL_SIZE.
-      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-2}
-      FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-8}
+      FLARE_CONCURRENCY: ${FLARE_CONCURRENCY:-3}
+      FLARE_MAX_QUEUE: ${FLARE_MAX_QUEUE:-12}
       # Always behind the Cloudflare Tunnel, so HTTPS is terminated in front.
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # /info panel: host counters come from the mounted procfs, container stats
@@ -144,7 +152,7 @@ services:
       TZ: America/Sao_Paulo
       REDIS_URL: redis://redis:6379
       # Warm browsers; the real RAM knob.
-      BROWSER_POOL_SIZE: ${TRAWL_POOL_SIZE:-2}
+      BROWSER_POOL_SIZE: ${TRAWL_POOL_SIZE:-3}
       BROWSER_CONTENT_PROCESSES: "2"
       BROWSER_RECYCLE_AFTER_CONTEXTS: "8"
       SESSION_TTL_SECONDS: ${TRAWL_SESSION_TTL:-3600}
@@ -165,7 +173,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
-    mem_limit: ${TRAWL_MEM:-2048m}
+    mem_limit: ${TRAWL_MEM:-3072m}
     networks:
       - manga
 
