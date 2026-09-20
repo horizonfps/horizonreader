@@ -49,11 +49,11 @@ export function workHref(item: {
 }
 
 export const STATUS_LABELS: Record<string, string> = {
-  READING: "Reading",
-  ON_HOLD: "On-hold",
-  DROPPED: "Dropped",
-  COMPLETED: "Completed",
-  PLAN_TO_READ: "Plan to read",
+  READING: "Lendo",
+  ON_HOLD: "Em pausa",
+  DROPPED: "Abandonei",
+  COMPLETED: "Concluído",
+  PLAN_TO_READ: "Quero ler",
 };
 
 export const STATUS_ORDER = ["READING", "ON_HOLD", "PLAN_TO_READ", "COMPLETED", "DROPPED"] as const;

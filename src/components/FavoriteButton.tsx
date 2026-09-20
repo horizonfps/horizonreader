@@ -65,7 +65,7 @@ export default function FavoriteButton({
     }
   }
 
-  const label = status ? STATUS_LABELS[status] ?? status : "Add to library";
+  const label = status ? STATUS_LABELS[status] ?? status : "Adicionar à biblioteca";
   const filled = status != null;
 
   return (
@@ -113,7 +113,7 @@ export default function FavoriteButton({
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 hover:bg-surface"
               >
                 <Trash2 className="h-4 w-4" />
-                Remove
+                Remover da biblioteca
               </button>
             </>
           )}

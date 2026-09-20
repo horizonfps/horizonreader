@@ -27,7 +27,7 @@ const DAY_MS = 86_400_000;
 // paints; the resolve keeps running in the background past this budget.
 const RESOLVE_BUDGET_MS = 3_500;
 
-const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
+const LATIN_ONLY = /^[\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]+$/u;
 
 function parseArr(json?: string | null): string[] {
   if (!json) return [];
@@ -50,7 +50,7 @@ function decodeSlug(raw: string): string {
 function altTitle(title: string, alts: string[]): string | null {
   const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
   const t = norm(title);
-  for (const a of alts) if (a && norm(a) !== t && !CJK.test(a)) return a;
+  for (const a of alts) if (a && norm(a) !== t && LATIN_ONLY.test(a) && /\p{L}/u.test(a)) return a;
   return null;
 }
 
@@ -138,7 +138,7 @@ export default async function WorkPage({
 
   return (
     <div className="relative">
-      <div aria-hidden className="absolute inset-x-0 top-0 -z-10 h-64 overflow-hidden sm:h-80 lg:h-96">
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 z-0 h-64 overflow-hidden sm:h-80 lg:h-96">
         <div className="absolute -inset-x-4 -top-4 bottom-0 lg:-inset-x-8">
           {cover ? (
             <div
@@ -150,7 +150,7 @@ export default async function WorkPage({
         </div>
       </div>
 
-      <header className="pt-4 sm:pt-8 lg:pt-12">
+      <header className="relative z-10 pt-4 sm:pt-8 lg:pt-12">
         <div className="flex gap-4 sm:gap-6 lg:gap-8">
           <div className="w-28 shrink-0 sm:w-44 lg:w-56">
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface shadow-2xl shadow-black/60 ring-1 ring-white/10">
@@ -235,7 +235,7 @@ export default async function WorkPage({
         ) : null}
       </header>
 
-      <div className="mt-6 flex flex-col gap-6 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-8">
+      <div className="relative z-10 mt-6 flex flex-col gap-6 lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-8">
         <aside className="order-3 space-y-5 lg:order-none lg:row-span-2">
           {details.length ? (
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">

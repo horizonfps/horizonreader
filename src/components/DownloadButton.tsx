@@ -87,15 +87,16 @@ export default function DownloadButton({
       type="button"
       onClick={send}
       disabled={disabled}
-      aria-label={label ?? "Baixar capítulo"}
+      aria-label={label ?? text}
+      title={label ?? text}
       className={
         label
-          ? "flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-xs font-medium text-muted disabled:opacity-60"
-          : "flex shrink-0 items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] text-muted disabled:opacity-60"
+          ? "flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-text disabled:opacity-60"
+          : "flex h-8 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] text-muted hover:bg-elevated hover:text-text disabled:opacity-60"
       }
     >
       <Icon className="h-4 w-4" />
-      {busy ? "…" : text}
+      {label || status || blocked ? (busy ? "…" : text) : null}
     </button>
   );
 }
