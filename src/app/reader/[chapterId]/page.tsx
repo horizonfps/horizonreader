@@ -15,9 +15,11 @@ import {
   type ChapterLink,
 } from "@/lib/chapterCache";
 import { crossSourceNeighbours } from "@/lib/crossSource";
-import Reader from "@/components/Reader";
+import Reader, { type ReaderChapter } from "@/components/Reader";
 
 export const dynamic = "force-dynamic";
+
+export const metadata = { title: "Leitor" };
 
 type ReaderData = {
   urls: string[];
@@ -32,6 +34,7 @@ type ReaderData = {
   nextId: number | null;
   prevNumber: number | null;
   nextNumber: number | null;
+  chapters: ReaderChapter[];
 };
 
 type StoredChapter = { urls: string[]; mangaId: number };
@@ -139,6 +142,7 @@ async function loadNative(chapterId: number, stored?: string[]): Promise<ReaderD
     nextId: next ? NATIVE_OFFSET + next.id : null,
     prevNumber: prev ? prev.chapterNumber : null,
     nextNumber: next ? next.chapterNumber : null,
+    chapters: siblings.map((s) => ({ id: NATIVE_OFFSET + s.id, number: s.chapterNumber, name: "" })),
   };
 }
 
@@ -213,6 +217,7 @@ async function loadSuwayomi(
     nextId: idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].id : null,
     prevNumber: idx > 0 ? ordered[idx - 1].chapterNumber : null,
     nextNumber: idx >= 0 && idx < ordered.length - 1 ? ordered[idx + 1].chapterNumber : null,
+    chapters: ordered.map((c) => ({ id: c.id, number: c.chapterNumber, name: c.name })),
   };
 }
 
@@ -269,6 +274,9 @@ export default async function ReaderPage({ params }: { params: Promise<{ chapter
       nextChapterId={cross.next?.id ?? null}
       prevSourceName={cross.prev?.fromOtherSource ? cross.prev.sourceName : null}
       nextSourceName={cross.next?.fromOtherSource ? cross.next.sourceName : null}
+      prevChapterNumber={cross.prev?.chapterNumber ?? null}
+      nextChapterNumber={cross.next?.chapterNumber ?? null}
+      chapters={data.chapters}
       downloaded={!!stored}
     />
   );

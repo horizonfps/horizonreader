@@ -1,13 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Settings2,
+  X,
+  Maximize2,
+  List,
+  ArrowLeft,
+} from "lucide-react";
 import SaveOfflineButton from "@/components/SaveOfflineButton";
 import { flushProgress, queueProgress, type PendingProgress } from "@/lib/offlineProgress";
+import { formatChapterNumber } from "@/lib/continueReading";
 
 type Mode = "vertical" | "paged";
 type Dir = "ltr" | "rtl";
+type Width = "fit" | "720" | "960" | "1200" | "full";
+type Bg = "black" | "gray" | "white";
+
+export type ReaderChapter = { id: number; number: number; name: string };
 
 type Props = {
   chapterId: number;
@@ -23,18 +37,24 @@ type Props = {
   nextChapterId: number | null;
   prevSourceName?: string | null;
   nextSourceName?: string | null;
+  nextChapterNumber?: number | null;
+  prevChapterNumber?: number | null;
+  chapters?: ReaderChapter[];
   downloaded?: boolean;
 };
 
+type Settings = { mode: Mode; dir: Dir; width: Width; gap: number; bg: Bg };
+
 const SETTINGS_KEY = "reader:settings";
+const DEFAULT_SETTINGS: Settings = { mode: "vertical", dir: "ltr", width: "960", gap: 0, bg: "black" };
 const MAX_RETRIES = 4;
 const RETRY_BASE_MS = 500;
 // Pages pulled ahead of the viewport so scrolling doesn't wait on the network.
-const PRELOAD_AHEAD = 4;
+const PRELOAD_AHEAD = 6;
 // Past this fraction of the chapter, the next chapter gets prepared in the
 // background so the next-chapter link opens instantly.
-const NEXT_CHAPTER_AT = 0.7;
-const NEXT_CHAPTER_PAGES = 3;
+const NEXT_CHAPTER_AT = 0.6;
+const NEXT_CHAPTER_PAGES = 4;
 // A prefetched dynamic route payload is only kept ~30s client-side
 // (next.config.mjs's staleTimes.dynamic), so the prefetch is repeated.
 const REPREFETCH_EVERY_MS = 25_000;
@@ -42,6 +62,23 @@ const ZOOM_MIN = 1;
 const ZOOM_MAX = 5;
 const ZOOM_STEP = 1.25;
 const ZOOM_DBLCLICK = 2.5;
+const UI_HIDE_MS = 3_000;
+
+const WIDTH_PX: Record<Width, string> = {
+  fit: "min(100%, 100vh * 0.72)",
+  "720": "720px",
+  "960": "960px",
+  "1200": "1200px",
+  full: "100%",
+};
+const WIDTH_LABEL: Record<Width, string> = {
+  fit: "Ajustar à altura",
+  "720": "Estreita",
+  "960": "Média",
+  "1200": "Larga",
+  full: "Tela inteira",
+};
+const BG_CLASS: Record<Bg, string> = { black: "bg-black", gray: "bg-neutral-800", white: "bg-neutral-100" };
 
 function clampScale(s: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
@@ -57,6 +94,14 @@ function touchDistance(touches: React.TouchList): number {
 function retryUrl(url: string, attempt: number): string {
   if (attempt === 0) return url;
   return `${url}${url.includes("?") ? "&" : "?"}_r=${attempt}`;
+}
+
+function chapterLabel(c: ReaderChapter): string {
+  const n = c.number > 0 ? `Cap. ${formatChapterNumber(c.number)}` : "";
+  const name = (c.name || "").trim();
+  if (!n) return name || "Capítulo";
+  if (!name || /^(chapter|cap[ií]tulo|cap\.?|ch\.?)\s*[\d.]+$/i.test(name)) return n;
+  return `${n} · ${name}`;
 }
 
 // A dropped page used to leave a black gap for the rest of the session: the
@@ -162,14 +207,17 @@ export default function Reader({
   nextChapterId,
   prevSourceName,
   nextSourceName,
+  nextChapterNumber,
+  prevChapterNumber,
+  chapters = [],
   downloaded,
 }: Props) {
   const router = useRouter();
   const total = pageUrls.length;
   const backHref = workSlug ? `/work/${workSlug}` : "/";
 
-  const [mode, setMode] = useState<Mode>("vertical");
-  const [dir, setDir] = useState<Dir>("ltr");
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const { mode, dir, width, gap, bg } = settings;
   const [page, setPage] = useState(initialPage);
   const [showUI, setShowUI] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -188,6 +236,7 @@ export default function Reader({
   const armedRef = useRef(initialPage <= 0);
   const warmedNextRef = useRef(false);
   const lastNextPrefetchRef = useRef(0);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const zoomLayerRef = useRef<HTMLDivElement>(null);
   const scaleRef = useRef(scale);
@@ -197,26 +246,34 @@ export default function Reader({
   const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const pinchRef = useRef<{ dist: number; scale: number } | null>(null);
 
-  // load persisted settings
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (raw) {
-        const s = JSON.parse(raw) as { mode?: Mode; dir?: Dir };
-        if (s.mode === "vertical" || s.mode === "paged") setMode(s.mode);
-        if (s.dir === "ltr" || s.dir === "rtl") setDir(s.dir);
+        const s = JSON.parse(raw) as Partial<Settings>;
+        setSettings((prev) => ({
+          mode: s.mode === "vertical" || s.mode === "paged" ? s.mode : prev.mode,
+          dir: s.dir === "ltr" || s.dir === "rtl" ? s.dir : prev.dir,
+          width: s.width && s.width in WIDTH_PX ? s.width : prev.width,
+          gap: typeof s.gap === "number" ? s.gap : prev.gap,
+          bg: s.bg === "black" || s.bg === "gray" || s.bg === "white" ? s.bg : prev.bg,
+        }));
       }
     } catch {
       /* ignore */
     }
   }, []);
 
-  const persistSettings = useCallback((m: Mode, d: Dir) => {
-    try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ mode: m, dir: d }));
-    } catch {
-      /* ignore */
-    }
+  const update = useCallback((patch: Partial<Settings>) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   }, []);
 
   const saveProgress = useCallback(
@@ -399,17 +456,39 @@ export default function Reader({
     });
   }, [prevChapterId, router]);
 
-  // paged: keyboard support
+  // keyboard: pages in paged mode, chapters in vertical mode
   useEffect(() => {
-    if (mode !== "paged") return;
     const onKey = (e: KeyboardEvent) => {
       if (zoomIndex !== null) return;
-      if (e.key === "ArrowRight") dir === "rtl" ? goPrevPage() : goNextPage();
-      if (e.key === "ArrowLeft") dir === "rtl" ? goNextPage() : goPrevPage();
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowRight") {
+        if (mode === "paged") dir === "rtl" ? goPrevPage() : goNextPage();
+        else if (nextChapterId) router.push(`/reader/${nextChapterId}`);
+      } else if (e.key === "ArrowLeft") {
+        if (mode === "paged") dir === "rtl" ? goNextPage() : goPrevPage();
+        else if (prevChapterId) router.push(`/reader/${prevChapterId}`);
+      } else if (e.key === "m" || e.key === "M") {
+        update({ mode: mode === "vertical" ? "paged" : "vertical" });
+      } else if (e.key === "h" || e.key === "H") {
+        setShowUI((v) => !v);
+      } else if (e.key === "Escape") {
+        setSettingsOpen(false);
+        setShowUI(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mode, dir, zoomIndex, goNextPage, goPrevPage]);
+  }, [mode, dir, zoomIndex, goNextPage, goPrevPage, nextChapterId, prevChapterId, router, update]);
+
+  // The bars fade out on their own after a moment of no interaction.
+  useEffect(() => {
+    if (!showUI || settingsOpen) return;
+    hideTimerRef.current = setTimeout(() => setShowUI(false), UI_HIDE_MS);
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [showUI, settingsOpen, page]);
 
   const openZoom = useCallback((i: number) => {
     setZoomIndex(i);
@@ -526,16 +605,33 @@ export default function Reader({
     }
   }
 
+  const chapterTitle = useMemo(() => {
+    const n = chapterNumber && chapterNumber > 0 ? `Cap. ${formatChapterNumber(chapterNumber)}` : "";
+    const t = (title || "").trim();
+    if (!n) return t || "Capítulo";
+    if (!t || /^(chapter|cap[ií]tulo|cap\.?|ch\.?)\s*[\d.]+$/i.test(t)) return n;
+    return `${n} · ${t}`;
+  }, [chapterNumber, title]);
+
+  const progressPct = total > 0 ? ((page + 1) / total) * 100 : 0;
+  const light = bg === "white";
+
   if (total === 0) {
     return (
-      <div className="flex h-[100dvh] items-center justify-center bg-black text-muted">
-        Sem páginas.
+      <div className="flex h-[100dvh] flex-col items-center justify-center gap-3 bg-black text-muted">
+        <p>Esta fonte não devolveu páginas.</p>
+        <Link href={backHref} className="rounded-lg bg-white/10 px-4 py-2 text-sm text-white">
+          Voltar à obra
+        </Link>
       </div>
     );
   }
 
+  const nextLabel = nextChapterNumber ? `Cap. ${formatChapterNumber(nextChapterNumber)}` : "Próximo";
+  const prevLabel = prevChapterNumber ? `Cap. ${formatChapterNumber(prevChapterNumber)}` : "Anterior";
+
   return (
-    <div className="relative h-[100dvh] w-full overflow-hidden bg-black">
+    <div className={`relative h-[100dvh] w-full overflow-hidden ${BG_CLASS[bg]}`}>
       {/* ---- content ---- */}
       {mode === "vertical" ? (
         <div
@@ -543,7 +639,7 @@ export default function Reader({
           onClick={() => setShowUI((v) => !v)}
           className="no-scrollbar h-full w-full overflow-y-auto"
         >
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="mx-auto w-full" style={{ maxWidth: WIDTH_PX[width] }}>
             {pageUrls.map((url, i) => (
               <div
                 key={i}
@@ -552,6 +648,7 @@ export default function Reader({
                   wrapRefs.current[i] = el;
                 }}
                 onDoubleClick={() => openZoom(i)}
+                style={gap ? { marginBottom: gap } : undefined}
               >
                 <PageImage
                   url={url}
@@ -563,16 +660,29 @@ export default function Reader({
               </div>
             ))}
           </div>
-          <div ref={endRef} className="flex flex-col items-center gap-3 py-10">
+          <div
+            ref={endRef}
+            className={`mx-auto flex w-full max-w-md flex-col items-center gap-3 px-4 py-12 ${light ? "text-neutral-800" : "text-white"}`}
+          >
+            <p className="text-xs uppercase tracking-widest opacity-60">Fim de {chapterTitle}</p>
             {nextChapterId ? (
-              <Link href={`/reader/${nextChapterId}`} className="rounded-xl bg-accent px-5 py-2.5 text-sm font-medium text-on-accent">
-                {nextSourceName ? `Próximo capítulo → (em ${nextSourceName})` : "Próximo capítulo →"}
+              <Link
+                href={`/reader/${nextChapterId}`}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-sm font-medium text-on-accent hover:bg-accent-hover"
+              >
+                {nextLabel}
+                {nextSourceName ? <span className="opacity-70">· em {nextSourceName}</span> : null}
+                <ChevronRight className="h-4 w-4" />
               </Link>
             ) : (
-              <p className="text-sm text-muted">Fim.</p>
+              <p className="text-sm opacity-70">Não há capítulo seguinte nesta fonte.</p>
             )}
-            <Link href={backHref} className="text-xs text-muted">
-              voltar ao mangá
+            <Link
+              href={backHref}
+              className={`flex items-center gap-1.5 text-xs ${light ? "text-neutral-600" : "text-white/70"} hover:underline`}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Voltar à obra
             </Link>
           </div>
         </div>
@@ -590,22 +700,27 @@ export default function Reader({
         </div>
       )}
 
+      {/* ---- always-on progress line ---- */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-0.5 bg-white/10">
+        <div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${progressPct}%` }} />
+      </div>
+
       {/* ---- floating controls (only while the bars are hidden) ---- */}
       {!showUI && !settingsOpen && (
         <>
           <Link
             href={backHref}
-            aria-label="Voltar ao mangá"
-            className="absolute left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-lg leading-none text-white backdrop-blur"
+            aria-label="Voltar à obra"
+            className="absolute left-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"
           >
-            ‹
+            <ChevronLeft className="h-5 w-5" />
           </Link>
           <button
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Ajustes"
-            className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-sm leading-none text-white backdrop-blur"
+            onClick={() => setShowUI(true)}
+            aria-label="Mostrar controles"
+            className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"
           >
-            ⚙
+            <List className="h-4 w-4" />
           </button>
         </>
       )}
@@ -613,16 +728,24 @@ export default function Reader({
       {/* ---- overlay UI ---- */}
       {showUI && (
         <>
-          <div className="absolute inset-x-0 top-0 z-20 flex items-center gap-3 bg-black/70 px-4 py-3 text-white backdrop-blur">
-            <Link href={backHref} className="text-lg leading-none">
-              ‹
+          <div
+            onMouseEnter={() => hideTimerRef.current && clearTimeout(hideTimerRef.current)}
+            className="absolute inset-x-0 top-0 z-20 flex items-center gap-2 bg-black/75 px-3 py-2.5 text-white backdrop-blur"
+          >
+            <Link href={backHref} aria-label="Voltar à obra" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10">
+              <ChevronLeft className="h-5 w-5" />
             </Link>
-            <span className="min-w-0 flex-1 truncate text-sm">{title}</span>
-            {downloaded ? (
-              <span className="shrink-0 rounded bg-white/15 px-1.5 py-0.5 text-[10px]">
-                Baixado
-              </span>
-            ) : null}
+            <div className="min-w-0 flex-1">
+              {workTitle ? (
+                <Link href={backHref} className="block truncate text-sm font-medium hover:underline">
+                  {workTitle}
+                </Link>
+              ) : null}
+              <p className="truncate text-xs text-white/70">
+                {chapterTitle}
+                {downloaded ? <span className="ml-1.5 rounded bg-white/15 px-1 py-px text-[10px]">baixado</span> : null}
+              </p>
+            </div>
             <SaveOfflineButton
               chapterId={chapterId}
               chapterName={title}
@@ -638,52 +761,85 @@ export default function Reader({
                 e.stopPropagation();
                 openZoom(page);
               }}
-              className="text-xs"
+              aria-label="Ampliar"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10"
             >
-              Ampliar
+              <Maximize2 className="h-4 w-4" />
             </button>
-            <button onClick={() => setSettingsOpen((v) => !v)} className="text-xs">
-              Ajustes
+            <button
+              onClick={() => setSettingsOpen((v) => !v)}
+              aria-label="Ajustes"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full hover:bg-white/10"
+            >
+              <Settings2 className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="absolute inset-x-0 bottom-0 z-20 flex items-center gap-3 bg-black/70 px-4 py-3 text-white backdrop-blur">
-            {prevChapterId ? (
-              <Link href={`/reader/${prevChapterId}`} className="flex items-center gap-1 text-xs">
-                <span>‹ cap</span>
-                {prevSourceName ? (
-                  <span className="max-w-[9rem] truncate text-white/70">· {prevSourceName}</span>
-                ) : null}
-              </Link>
-            ) : (
-              <span className="w-8" />
-            )}
-            {mode === "paged" ? (
-              <input
-                type="range"
-                min={0}
-                max={total - 1}
-                value={page}
-                onChange={(e) => setPage(Number(e.target.value))}
-                className="flex-1 accent-[var(--accent)]"
-                dir={dir}
-              />
-            ) : (
-              <span className="flex-1" />
-            )}
-            <span className="w-12 text-right text-xs tabular-nums">
-              {page + 1}/{total}
-            </span>
-            {nextChapterId ? (
-              <Link href={`/reader/${nextChapterId}`} className="flex items-center gap-1 text-xs">
-                <span>cap ›</span>
-                {nextSourceName ? (
-                  <span className="max-w-[9rem] truncate text-white/70">· {nextSourceName}</span>
-                ) : null}
-              </Link>
-            ) : (
-              <span className="w-8" />
-            )}
+          <div
+            onMouseEnter={() => hideTimerRef.current && clearTimeout(hideTimerRef.current)}
+            className="absolute inset-x-0 bottom-0 z-20 bg-black/75 px-3 pb-3 pt-2 text-white backdrop-blur"
+            style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+          >
+            <div className="mx-auto flex max-w-3xl items-center gap-2">
+              {prevChapterId ? (
+                <Link
+                  href={`/reader/${prevChapterId}`}
+                  title={prevSourceName ? `${prevLabel} · ${prevSourceName}` : prevLabel}
+                  className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 text-xs hover:bg-white/20"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden sm:inline">{prevLabel}</span>
+                </Link>
+              ) : (
+                <span className="h-9 w-9 shrink-0" />
+              )}
+
+              {chapters.length > 1 ? (
+                <select
+                  value={chapterId}
+                  onChange={(e) => router.push(`/reader/${e.target.value}`)}
+                  aria-label="Capítulo"
+                  className="h-9 min-w-0 flex-1 rounded-lg bg-white/10 px-2 text-xs text-white outline-none"
+                >
+                  {chapters.map((c) => (
+                    <option key={c.id} value={c.id} className="bg-neutral-900 text-white">
+                      {chapterLabel(c)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-center text-xs">{chapterTitle}</span>
+              )}
+
+              {mode === "paged" ? (
+                <input
+                  type="range"
+                  min={0}
+                  max={total - 1}
+                  value={page}
+                  onChange={(e) => setPage(Number(e.target.value))}
+                  className="hidden w-32 accent-[rgb(var(--accent))] sm:block"
+                  dir={dir}
+                  aria-label="Página"
+                />
+              ) : null}
+              <span className="w-14 shrink-0 text-center text-xs tabular-nums">
+                {page + 1}/{total}
+              </span>
+
+              {nextChapterId ? (
+                <Link
+                  href={`/reader/${nextChapterId}`}
+                  title={nextSourceName ? `${nextLabel} · ${nextSourceName}` : nextLabel}
+                  className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 text-xs hover:bg-white/20"
+                >
+                  <span className="hidden sm:inline">{nextLabel}</span>
+                  <ChevronRight className="h-4 w-4" />
+                </Link>
+              ) : (
+                <span className="h-9 w-9 shrink-0" />
+              )}
+            </div>
           </div>
         </>
       )}
@@ -691,57 +847,89 @@ export default function Reader({
       {/* ---- settings panel ---- */}
       {settingsOpen && (
         <div
-          className="absolute inset-0 z-40 flex items-end bg-black/50"
+          className="absolute inset-0 z-40 flex items-end bg-black/50 sm:items-stretch sm:justify-end"
           onClick={() => setSettingsOpen(false)}
         >
           <div
-            className="w-full space-y-4 rounded-t-2xl bg-surface p-5 text-text"
+            className="w-full space-y-5 overflow-y-auto rounded-t-2xl bg-surface p-5 text-text sm:w-80 sm:rounded-none sm:border-l sm:border-border"
             onClick={(e) => e.stopPropagation()}
           >
-            <div>
-              <p className="mb-2 text-xs uppercase tracking-wide text-muted">Modo de leitura</p>
-              <div className="flex gap-2">
-                {(["vertical", "paged"] as Mode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      setMode(m);
-                      persistSettings(m, dir);
-                    }}
-                    className={`flex-1 rounded-xl px-3 py-2 text-sm ${mode === m ? "bg-accent text-on-accent" : "bg-elevated text-muted"}`}
-                  >
-                    {m === "vertical" ? "Vertical (webtoon)" : "Paginado"}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold">Leitura</p>
+              <button
+                onClick={() => setSettingsOpen(false)}
+                aria-label="Fechar"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-muted hover:bg-elevated hover:text-text"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
-            {mode === "paged" && (
-              <div>
-                <p className="mb-2 text-xs uppercase tracking-wide text-muted">Direção</p>
-                <div className="flex gap-2">
-                  {(["ltr", "rtl"] as Dir[]).map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => {
-                        setDir(d);
-                        persistSettings(mode, d);
-                      }}
-                      className={`flex-1 rounded-xl px-3 py-2 text-sm ${dir === d ? "bg-accent text-on-accent" : "bg-elevated text-muted"}`}
-                    >
-                      {d === "ltr" ? "Esquerda → direita" : "Direita → esquerda (mangá)"}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <Field label="Modo">
+              <Segmented
+                value={mode}
+                onChange={(v) => update({ mode: v as Mode })}
+                options={[
+                  { value: "vertical", label: "Vertical" },
+                  { value: "paged", label: "Paginado" },
+                ]}
+              />
+            </Field>
+
+            {mode === "paged" ? (
+              <Field label="Direção">
+                <Segmented
+                  value={dir}
+                  onChange={(v) => update({ dir: v as Dir })}
+                  options={[
+                    { value: "ltr", label: "Esquerda → direita" },
+                    { value: "rtl", label: "Direita → esquerda" },
+                  ]}
+                />
+              </Field>
+            ) : (
+              <>
+                <Field label="Largura">
+                  <Segmented
+                    value={width}
+                    onChange={(v) => update({ width: v as Width })}
+                    options={(Object.keys(WIDTH_PX) as Width[]).map((w) => ({ value: w, label: WIDTH_LABEL[w] }))}
+                    wrap
+                  />
+                </Field>
+                <Field label="Espaço entre páginas">
+                  <Segmented
+                    value={String(gap)}
+                    onChange={(v) => update({ gap: Number(v) })}
+                    options={[
+                      { value: "0", label: "Nenhum" },
+                      { value: "8", label: "Pequeno" },
+                      { value: "20", label: "Grande" },
+                    ]}
+                  />
+                </Field>
+              </>
             )}
 
-            <button
-              onClick={() => setSettingsOpen(false)}
-              className="w-full rounded-xl bg-elevated py-2 text-sm"
-            >
-              Fechar
-            </button>
+            <Field label="Fundo">
+              <Segmented
+                value={bg}
+                onChange={(v) => update({ bg: v as Bg })}
+                options={[
+                  { value: "black", label: "Preto" },
+                  { value: "gray", label: "Cinza" },
+                  { value: "white", label: "Branco" },
+                ]}
+              />
+            </Field>
+
+            <div className="space-y-1 border-t border-border pt-4 text-xs text-muted">
+              <p className="mb-1.5 font-medium text-text">Atalhos</p>
+              <p><kbd className="rounded border border-border px-1">←</kbd> <kbd className="rounded border border-border px-1">→</kbd> {mode === "paged" ? "página" : "capítulo"} anterior / seguinte</p>
+              <p><kbd className="rounded border border-border px-1">M</kbd> alterna vertical / paginado</p>
+              <p><kbd className="rounded border border-border px-1">H</kbd> mostra ou esconde os controles</p>
+              <p>Duplo clique amplia a página</p>
+            </div>
           </div>
         </div>
       )}
@@ -829,6 +1017,44 @@ export default function Reader({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+  wrap,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  wrap?: boolean;
+}) {
+  return (
+    <div className={`flex gap-1.5 ${wrap ? "flex-wrap" : ""}`}>
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`rounded-lg px-3 py-2 text-xs ${wrap ? "" : "flex-1"} ${
+            value === o.value ? "bg-accent font-medium text-on-accent" : "bg-elevated text-muted hover:text-text"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }
