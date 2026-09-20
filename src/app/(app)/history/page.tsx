@@ -30,10 +30,5 @@ export default async function HistoryPage() {
     work: r.work,
   }));
 
-  return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold tracking-tight">Histórico</h1>
-      <HistoryList entries={entries} now={Date.now()} />
-    </div>
-  );
+  return <HistoryList entries={entries} now={Date.now()} />;
 }

@@ -49,11 +49,29 @@ export default function HistoryList({ entries, now }: { entries: HistoryEntry[];
     router.refresh();
   }
 
+  const header = (
+    <div className="flex items-center gap-3">
+      <h1 className="text-xl font-semibold tracking-tight">Histórico</h1>
+      {visible.length ? (
+        <button
+          type="button"
+          onClick={clearAll}
+          disabled={busy}
+          className="ml-auto flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-text disabled:opacity-50"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Limpar histórico
+        </button>
+      ) : null}
+    </div>
+  );
+
   if (!visible.length) {
     return (
-      <p className="py-16 text-center text-sm text-muted">
-        Os capítulos que você abrir aparecem aqui.
-      </p>
+      <div className="space-y-4">
+        {header}
+        <p className="py-16 text-center text-sm text-muted">Os capítulos que você abrir aparecem aqui.</p>
+      </div>
     );
   }
 
@@ -67,17 +85,7 @@ export default function HistoryList({ entries, now }: { entries: HistoryEntry[];
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={clearAll}
-          disabled={busy}
-          className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-muted hover:bg-elevated hover:text-text disabled:opacity-50"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          Limpar histórico
-        </button>
-      </div>
+      {header}
       {groups.map((g) => (
         <section key={g.label}>
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">{g.label}</h2>
