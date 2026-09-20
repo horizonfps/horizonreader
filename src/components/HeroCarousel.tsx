@@ -136,7 +136,7 @@ export default function HeroCarousel({ items }: { items: HeroItem[] }) {
 
       {items.length > 1 ? (
         <>
-          <div className="absolute bottom-3 right-4 z-10 flex items-center gap-2 sm:bottom-4 sm:right-6">
+          <div className="absolute right-4 top-3 z-10 flex items-center gap-2 sm:bottom-4 sm:right-6 sm:top-auto">
             <span className="text-xs tabular-nums text-muted">
               {index + 1}/{items.length}
             </span>
@@ -144,7 +144,7 @@ export default function HeroCarousel({ items }: { items: HeroItem[] }) {
               type="button"
               aria-label="Anterior"
               onClick={() => emblaApi?.scrollPrev()}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-text backdrop-blur transition-colors hover:bg-black/70"
+              className="hidden h-8 w-8 items-center justify-center rounded-full bg-black/50 text-text backdrop-blur transition-colors hover:bg-black/70 sm:flex"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -152,7 +152,7 @@ export default function HeroCarousel({ items }: { items: HeroItem[] }) {
               type="button"
               aria-label="Próximo"
               onClick={() => emblaApi?.scrollNext()}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-text backdrop-blur transition-colors hover:bg-black/70"
+              className="hidden h-8 w-8 items-center justify-center rounded-full bg-black/50 text-text backdrop-blur transition-colors hover:bg-black/70 sm:flex"
             >
               <ChevronRight className="h-4 w-4" />
             </button>
