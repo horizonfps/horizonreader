@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import ExportButton from "@/components/ExportButton";
+import ShareButton from "@/components/ShareButton";
 import ProfileEditForm from "@/components/ProfileEditForm";
 import ProfileView from "@/components/ProfileView";
 import { profileGameStats } from "@/lib/readerStats";
@@ -48,6 +49,11 @@ export default async function ProfilePage() {
       game={game}
       actions={
         <>
+          <ShareButton
+            title={profileUser.displayName || profileUser.username}
+            path={`/u/${encodeURIComponent(profileUser.username)}`}
+            size="gap-2 px-3 py-2 text-sm text-text [&_svg]:h-4 [&_svg]:w-4"
+          />
           <ExportButton />
           <ProfileEditForm
             initial={{

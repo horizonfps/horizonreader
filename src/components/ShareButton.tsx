@@ -3,7 +3,17 @@
 import { useEffect, useState } from "react";
 import { Check, Share2 } from "lucide-react";
 
-export default function ShareButton({ title, path }: { title: string; path: string }) {
+const COMPACT = "gap-1.5 px-3 py-1.5 text-xs text-muted [&_svg]:h-3.5 [&_svg]:w-3.5";
+
+export default function ShareButton({
+  title,
+  path,
+  size = COMPACT,
+}: {
+  title: string;
+  path: string;
+  size?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -34,9 +44,9 @@ export default function ShareButton({ title, path }: { title: string; path: stri
     <button
       type="button"
       onClick={share}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs text-muted hover:bg-elevated"
+      className={`inline-flex shrink-0 items-center rounded-lg border border-border bg-surface hover:bg-elevated ${size}`}
     >
-      {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Share2 className="h-3.5 w-3.5" />}
+      {copied ? <Check className="text-green-400" /> : <Share2 />}
       {copied ? "Link copiado" : "Compartilhar"}
     </button>
   );
