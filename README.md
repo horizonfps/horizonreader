@@ -2,8 +2,8 @@
 
 A self-hosted manga reader for people who are tired of scan sites dying, rebranding,
 drowning in ads, or losing your reading progress every other month. Host it yourself,
-read on your phone, and do your own gatekeeping: there is no public sign-up — you
-create accounts by hand for yourself and the friends you actually want around.
+read on your phone, and do your own gatekeeping: there is no public sign-up — accounts
+come from the CLI or from single-use invite links handed to friends you actually want around.
 
 Under the hood, [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) does
 the heavy lifting (scraping sources through Mihon/Tachiyomi extensions and downloading
@@ -26,8 +26,9 @@ own login, per-user library, and reading progress.
 - **Content filter built in**: pornographic works (hentai/smut) and BL/GL titles
   are excluded from every discovery surface. Erotica-rated seinen (think Berserk)
   stays searchable; home/browse stick to safe/suggestive.
-- **Your own gatekeeping**: no sign-up page, no "forgot password". Accounts are
-  created by CLI, period.
+- **Your own gatekeeping**: invite-only, no "forgot password". Each account can hold
+  3 pending invite links (admins unlimited), single-use and valid for 7 days; the CLI
+  still creates accounts directly.
 - **Privacy by design**: the browser only ever talks to the app. Covers and pages are
   proxied server-side; Suwayomi is never exposed.
 - **xlsx export** of your reading list, if you ever want out.

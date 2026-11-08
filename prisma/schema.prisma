@@ -7,7 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Accounts are created manually (CLI / direct DB insert). No self sign-up.
+// Accounts come from the CLI or from a single-use invite link.
 model User {
   id              Int                @id @default(autoincrement())
   username        String             @unique
@@ -24,6 +24,22 @@ model User {
   favorites       Favorite[]
   history         ReadingHistory[]
   downloads       ChapterDownload[]
+  invitesCreated  Invite[]           @relation("InvitesCreated")
+  invite          Invite?            @relation("InviteUsed")
+}
+
+model Invite {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique
+  createdById Int
+  usedById    Int?      @unique
+  usedAt      DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  createdBy   User      @relation("InvitesCreated", fields: [createdById], references: [id], onDelete: Cascade)
+  usedBy      User?     @relation("InviteUsed", fields: [usedById], references: [id], onDelete: SetNull)
+
+  @@index([createdById])
 }
 
 // Legacy per-user library. Superseded by Favorite; kept so old data survives.

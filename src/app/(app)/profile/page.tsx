@@ -13,7 +13,7 @@ export default async function ProfilePage() {
   if (!session) return null;
 
   const [user, favorites, history, chaptersRead] = await Promise.all([
-    prisma.user.findUnique({ where: { id: session.uid } }).catch(() => null),
+    prisma.user.findUnique({ where: { id: session.uid }, include: { invite: { select: { createdBy: { select: { username: true, displayName: true } } } } } }).catch(() => null),
     prisma.favorite
       .findMany({ where: { userId: session.uid }, include: { work: true }, orderBy: { updatedAt: "desc" } })
       .catch(() => []),
@@ -36,6 +36,7 @@ export default async function ProfilePage() {
     bio: user?.bio ?? null,
     isAdmin: user?.isAdmin ?? session.isAdmin,
     createdAt: user?.createdAt ?? null,
+    invitedBy: user?.invite?.createdBy ?? null,
   };
 
   return (

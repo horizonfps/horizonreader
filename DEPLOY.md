@@ -102,7 +102,11 @@ divide o tráfego com este. Ao mudar de máquina, remova o de lá
 ```
 docker compose exec web npm run user -- add <usuario> <senha> --admin
 docker compose exec web npm run user -- list
+docker compose exec web npm run user -- invite <usuario>
 ```
+
+Quem já tem conta gera convites em `/invites`: cada link vale uma conta e expira
+em 7 dias, com até 3 pendentes por pessoa (admin sem limite).
 
 ## Dados e persistência
 

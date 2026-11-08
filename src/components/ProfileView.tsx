@@ -20,6 +20,7 @@ export type ProfileUser = {
   bio: string | null;
   isAdmin: boolean;
   createdAt?: Date | null;
+  invitedBy?: { username: string; displayName: string | null } | null;
 };
 
 export type ProfileStats = {
@@ -124,6 +125,14 @@ export default function ProfileView({
             <p className="text-sm text-muted">
               @{user.username}
               {user.createdAt ? ` · desde ${user.createdAt.toLocaleDateString("pt-BR", { month: "short", year: "numeric" })}` : ""}
+              {user.invitedBy ? (
+                <>
+                  {" · convidado por "}
+                  <Link href={`/u/${encodeURIComponent(user.invitedBy.username)}`} className="text-text hover:underline">
+                    {user.invitedBy.displayName || user.invitedBy.username}
+                  </Link>
+                </>
+              ) : null}
             </p>
             {user.bio ? (
               <p className="mt-2 max-w-2xl whitespace-pre-line text-sm text-text/85">{user.bio}</p>

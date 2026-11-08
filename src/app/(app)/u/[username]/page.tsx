@@ -26,7 +26,7 @@ export default async function PublicProfilePage({
   // Next already decodes the dynamic route param; do not decode again.
   const { username } = await params;
 
-  const user = await prisma.user.findUnique({ where: { username } }).catch(() => null);
+  const user = await prisma.user.findUnique({ where: { username }, include: { invite: { select: { createdBy: { select: { username: true, displayName: true } } } } } }).catch(() => null);
   if (!user) notFound();
 
   const [favorites, history, chaptersRead] = await Promise.all([
@@ -54,6 +54,7 @@ export default async function PublicProfilePage({
         bio: user.bio,
         isAdmin: user.isAdmin,
         createdAt: user.createdAt,
+        invitedBy: user.invite?.createdBy ?? null,
       }}
       favorites={favorites}
       history={history}

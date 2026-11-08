@@ -3,7 +3,7 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/jwt";
 
 // The solver facade authenticates with a secret path token instead of a
 // session: it is called by Suwayomi, which carries no cookies.
-const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/solver"];
+const PUBLIC_PATHS = ["/login", "/api/auth/login", "/api/solver", "/invite", "/api/auth/register"];
 
 function isPublic(pathname: string) {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));

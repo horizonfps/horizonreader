@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User as UserIcon, LogOut, Activity, Download, History, Shuffle } from "lucide-react";
+import { User as UserIcon, LogOut, Activity, Download, History, Shuffle, Ticket } from "lucide-react";
 import { coverProxy } from "@/lib/cards";
 import Username from "@/components/Username";
 
@@ -86,6 +86,10 @@ export default function UserMenu({
             <Shuffle className="h-4 w-4 text-muted" />
             Obra aleatória
           </a>
+          <Link href="/invites" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Ticket className="h-4 w-4 text-muted" />
+            Convites
+          </Link>
           {isAdmin ? (
             <Link href="/info" role="menuitem" onClick={() => setOpen(false)} className={item}>
               <Activity className="h-4 w-4 text-muted" />

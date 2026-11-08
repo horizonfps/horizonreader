@@ -1,14 +1,16 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "node:crypto";
 
 const prisma = new PrismaClient();
 
 function usage(): never {
-  console.log(`Manage accounts (there is no self sign-up).
+  console.log(`Manage accounts (self sign-up only through invites).
 
   npm run user -- add <username> <password> [--admin]
   npm run user -- passwd <username> <newpassword>
   npm run user -- remove <username>
+  npm run user -- invite <username>
   npm run user -- list`);
   process.exit(1);
 }
@@ -43,6 +45,20 @@ async function main() {
       if (!username) usage();
       await prisma.user.delete({ where: { username } });
       console.log(`Removed "${username}".`);
+      break;
+    }
+    case "invite": {
+      const [username] = args;
+      if (!username) usage();
+      const owner = await prisma.user.findUniqueOrThrow({ where: { username } });
+      const invite = await prisma.invite.create({
+        data: {
+          code: randomBytes(9).toString("base64url"),
+          createdById: owner.id,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
+      console.log(`/invite/${invite.code}  (from "${username}", expires ${invite.expiresAt.toISOString().slice(0, 10)})`);
       break;
     }
     case "list": {
