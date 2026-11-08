@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User as UserIcon, LogOut, Activity, Download, History, Shuffle, Ticket } from "lucide-react";
+import { User as UserIcon, LogOut, Activity, Download, History, Shuffle, Ticket, Trophy } from "lucide-react";
 import { coverProxy } from "@/lib/cards";
 import Username from "@/components/Username";
 
@@ -73,6 +73,10 @@ export default function UserMenu({
           <Link href="/profile" role="menuitem" onClick={() => setOpen(false)} className={item}>
             <UserIcon className="h-4 w-4 text-muted" />
             Perfil
+          </Link>
+          <Link href="/ranking" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Trophy className="h-4 w-4 text-muted" />
+            Ranking
           </Link>
           <Link href="/history" role="menuitem" onClick={() => setOpen(false)} className={item}>
             <History className="h-4 w-4 text-muted" />

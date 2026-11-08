@@ -1,4 +1,4 @@
-import { Home, Compass, Search, Bookmark, History, Download, Shuffle, User, Activity } from "lucide-react";
+import { Home, Compass, Search, Bookmark, History, Download, Shuffle, User, Activity, Trophy } from "lucide-react";
 
 export type NavItem = {
   href: string;
@@ -17,6 +17,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/search", label: "Buscar", Icon: Search, mobileOnly: true },
   { href: "/library", label: "Biblioteca", Icon: Bookmark },
   { href: "/history", label: "Histórico", Icon: History, desktopOnly: true },
+  { href: "/ranking", label: "Ranking", Icon: Trophy, desktopOnly: true },
   { href: "/downloads", label: "Downloads", Icon: Download },
   { href: "/random", label: "Obra aleatória", Icon: Shuffle, desktopOnly: true, plain: true },
   { href: "/profile", label: "Perfil", Icon: User },
