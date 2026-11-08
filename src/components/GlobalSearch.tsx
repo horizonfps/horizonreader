@@ -2,23 +2,58 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Search, X } from "lucide-react";
+import { Search, User as UserIcon, X } from "lucide-react";
 import { coverProxy, workHref, type Card } from "@/lib/cards";
 import { typeLabel, statusLabel } from "@/lib/labels";
+import Username from "@/components/Username";
 
 const DEBOUNCE_MS = 250;
 const MAX_ROWS = 8;
+const MAX_USERS = 4;
+
+export type UserHit = {
+  username: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  isAdmin: boolean;
+};
+
+export const profileHref = (u: UserHit) => `/u/${encodeURIComponent(u.username)}`;
 
 export default function GlobalSearch({ className = "" }: { className?: string }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Card[]>([]);
+  const [users, setUsers] = useState<UserHit[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [cursor, setCursor] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const reqId = useRef(0);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setUsers([]);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      fetch(`/api/users/search?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((d: { users?: UserHit[] }) => {
+          if (alive) setUsers(Array.isArray(d.users) ? d.users.slice(0, MAX_USERS) : []);
+        })
+        .catch(() => {
+          if (alive) setUsers([]);
+        });
+    }, DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [query]);
 
   useEffect(() => {
     const q = query.trim();
@@ -83,7 +118,7 @@ export default function GlobalSearch({ className = "" }: { className?: string })
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setOpen(true);
-      setCursor((c) => Math.min(c + 1, items.length - 1));
+      setCursor((c) => Math.min(c + 1, users.length + items.length - 1));
       return;
     }
     if (e.key === "ArrowUp") {
@@ -93,9 +128,15 @@ export default function GlobalSearch({ className = "" }: { className?: string })
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      if (cursor >= 0 && items[cursor]) {
+      const target =
+        cursor < 0
+          ? null
+          : cursor < users.length
+            ? profileHref(users[cursor])
+            : items[cursor - users.length] && workHref(items[cursor - users.length]);
+      if (target) {
         setOpen(false);
-        router.push(workHref(items[cursor]));
+        router.push(target);
         return;
       }
       goToResults();
@@ -118,12 +159,12 @@ export default function GlobalSearch({ className = "" }: { className?: string })
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder="Buscar obras"
+          placeholder="Buscar obras ou leitores"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="search"
-          aria-label="Buscar obras"
+          aria-label="Buscar obras ou leitores"
           className="h-9 w-full rounded-lg border border-border bg-bg pl-9 pr-8 text-sm text-text outline-none transition-colors placeholder:text-muted focus:border-accent"
         />
         {query ? (
@@ -147,9 +188,46 @@ export default function GlobalSearch({ className = "" }: { className?: string })
 
       {showPanel ? (
         <div className="absolute left-0 right-0 top-full z-50 mt-1.5 overflow-hidden rounded-xl border border-border bg-surface shadow-2xl shadow-black/60">
+          {users.length > 0 ? (
+            <ul className="border-b border-border py-1">
+              {users.map((u, i) => {
+                const src = coverProxy(u.avatarUrl);
+                return (
+                  <li key={u.username}>
+                    <a
+                      href={profileHref(u)}
+                      onMouseEnter={() => setCursor(i)}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setOpen(false);
+                        router.push(profileHref(u));
+                      }}
+                      className={`flex items-center gap-3 px-3 py-1.5 ${
+                        i === cursor ? "bg-elevated" : "hover:bg-elevated"
+                      }`}
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-elevated text-muted">
+                        {src ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={src} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <UserIcon className="h-4 w-4" />
+                        )}
+                      </div>
+                      <p className="min-w-0 truncate text-sm">
+                        <Username name={u.displayName || u.username} isAdmin={u.isAdmin} className="text-text" />
+                        <span className="ml-1.5 text-xs text-muted">@{u.username}</span>
+                      </p>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
           {items.length > 0 ? (
-            <ul className="max-h-[70vh] overflow-y-auto py-1">
-              {items.map((item, i) => {
+            <ul className="max-h-[60vh] overflow-y-auto py-1">
+              {items.map((item, j) => {
+                const i = j + users.length;
                 const src = coverProxy(item.coverUrl);
                 const meta = [typeLabel(item.type), statusLabel(item.status)].filter(Boolean).join(" · ");
                 return (

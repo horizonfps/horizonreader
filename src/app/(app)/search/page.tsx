@@ -46,6 +46,7 @@ function SearchView() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [users, setUsers] = useState<TopUser[]>([]);
+  const [matchedUsers, setMatchedUsers] = useState<TopUser[]>([]);
   const [recent, setRecent] = useState<string[]>([]);
   const reqId = useRef(0);
 
@@ -62,6 +63,27 @@ function SearchView() {
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setMatchedUsers([]);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      fetch(`/api/users/search?q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((d: { users?: TopUser[] }) => {
+          if (alive) setMatchedUsers(Array.isArray(d.users) ? d.users : []);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [query]);
 
   // Debounced search + URL sync; stale responses are dropped via reqId.
   useEffect(() => {
@@ -99,6 +121,7 @@ function SearchView() {
   }, [query, router]);
 
   const trimmed = query.trim();
+  const shownUsers = trimmed ? matchedUsers : users;
   const seen = new Set<string>();
 
   return (
@@ -109,7 +132,7 @@ function SearchView() {
           autoFocus
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar obras"
+          placeholder="Buscar obras ou leitores"
           autoCapitalize="none"
           autoCorrect="off"
           enterKeyHint="search"
@@ -158,11 +181,16 @@ function SearchView() {
         </section>
       ) : null}
 
-      {!trimmed && users.length > 0 ? (
+      {shownUsers.length > 0 ? (
         <section>
-          <h2 className="mb-2 text-sm font-semibold text-text">Leitores</h2>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-text">Leitores</h2>
+            <Link href="/ranking" className="text-xs text-muted hover:text-text">
+              Ver todos
+            </Link>
+          </div>
           <div className="no-scrollbar -mx-4 flex gap-4 overflow-x-auto px-4 pb-1">
-            {users.map((u) => {
+            {shownUsers.map((u) => {
               const src = coverProxy(u.avatarUrl);
               return (
                 <Link
