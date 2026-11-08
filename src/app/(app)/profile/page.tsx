@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import ExportButton from "@/components/ExportButton";
 import ProfileEditForm from "@/components/ProfileEditForm";
 import ProfileView from "@/components/ProfileView";
+import { profileGameStats } from "@/lib/readerStats";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export default async function ProfilePage() {
   const session = await getSession();
   if (!session) return null;
 
-  const [user, favorites, history, chaptersRead] = await Promise.all([
+  const [user, favorites, history, game] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.uid }, include: { invite: { select: { createdBy: { select: { username: true, displayName: true } } } } } }).catch(() => null),
     prisma.favorite
       .findMany({ where: { userId: session.uid }, include: { work: true }, orderBy: { updatedAt: "desc" } })
@@ -25,7 +26,7 @@ export default async function ProfilePage() {
         take: 40,
       })
       .catch(() => []),
-    prisma.progress.count({ where: { userId: session.uid, read: true } }).catch(() => 0),
+    profileGameStats(session.uid).catch(() => null),
   ]);
 
   const profileUser = {
@@ -44,7 +45,7 @@ export default async function ProfilePage() {
       user={profileUser}
       favorites={favorites}
       history={history}
-      stats={{ chaptersRead }}
+      game={game}
       actions={
         <>
           <ExportButton />

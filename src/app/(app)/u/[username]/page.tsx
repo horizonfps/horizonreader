@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import ProfileView from "@/components/ProfileView";
+import { profileGameStats } from "@/lib/readerStats";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,7 @@ export default async function PublicProfilePage({
   const user = await prisma.user.findUnique({ where: { username }, include: { invite: { select: { createdBy: { select: { username: true, displayName: true } } } } } }).catch(() => null);
   if (!user) notFound();
 
-  const [favorites, history, chaptersRead] = await Promise.all([
+  const [favorites, history, game] = await Promise.all([
     prisma.favorite
       .findMany({ where: { userId: user.id }, include: { work: true }, orderBy: { updatedAt: "desc" } })
       .catch(() => []),
@@ -41,7 +42,7 @@ export default async function PublicProfilePage({
         take: 40,
       })
       .catch(() => []),
-    prisma.progress.count({ where: { userId: user.id, read: true } }).catch(() => 0),
+    profileGameStats(user.id).catch(() => null),
   ]);
 
   return (
@@ -58,7 +59,7 @@ export default async function PublicProfilePage({
       }}
       favorites={favorites}
       history={history}
-      stats={{ chaptersRead }}
+      game={game}
     />
   );
 }

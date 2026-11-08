@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { User as UserIcon } from "lucide-react";
+import { Award, Flame, User as UserIcon } from "lucide-react";
+import type { ProfileGameStats } from "@/lib/readerStats";
 import type { Favorite, Work, ReadingHistory } from "@prisma/client";
 import { coverProxy, STATUS_ORDER, STATUS_LABELS } from "@/lib/cards";
 import { timeAgo, typeLabel } from "@/lib/labels";
@@ -23,23 +24,19 @@ export type ProfileUser = {
   invitedBy?: { username: string; displayName: string | null } | null;
 };
 
-export type ProfileStats = {
-  chaptersRead: number;
-};
-
 // Read-only profile body shared by the own-profile page and public /u/[username].
 // `actions` injects the owner-only edit/export controls.
 export default function ProfileView({
   user,
   favorites,
   history,
-  stats,
+  game,
   actions,
 }: {
   user: ProfileUser;
   favorites: FavWithWork[];
   history: HistoryWithWork[];
-  stats?: ProfileStats;
+  game?: ProfileGameStats | null;
   actions?: React.ReactNode;
 }) {
   const displayName = user.displayName || user.username;
@@ -89,11 +86,18 @@ export default function ProfileView({
     return true;
   });
 
+  const g = game?.stats;
+  const fmt = (n: number) => n.toLocaleString("pt-BR");
   const tiles: { label: string; value: string }[] = [
-    { label: "na biblioteca", value: String(favorites.length) },
-    { label: "capítulos lidos", value: String(stats?.chaptersRead ?? 0) },
-    { label: "concluídas", value: String(statusCounts.COMPLETED ?? 0) },
+    { label: "capítulos lidos", value: fmt(g?.total.chapters ?? 0) },
+    { label: "páginas", value: fmt(g?.total.pages ?? 0) },
+    { label: "obras lidas", value: fmt(g?.total.works ?? 0) },
+    { label: "na biblioteca", value: fmt(favorites.length) },
+    { label: "concluídas", value: fmt(statusCounts.COMPLETED ?? 0) },
+    { label: "dias ativos", value: fmt(g?.total.days ?? 0) },
   ];
+  const levelSpan = g ? g.nextLevelAt - g.levelFloor : 1;
+  const levelPct = g ? Math.min(100, Math.round(((g.xp - g.levelFloor) / levelSpan) * 100)) : 0;
 
   return (
     <div className="space-y-8">
@@ -142,7 +146,35 @@ export default function ProfileView({
         </div>
       </section>
 
-      <section className="grid grid-cols-3 gap-2 sm:max-w-md">
+      {g && game ? (
+        <section className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-border bg-surface/60 px-4 py-3 sm:max-w-2xl">
+          <div className="min-w-[12rem] flex-1">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-lg font-bold text-text">Nível {g.level}</p>
+              <p className="text-xs tabular-nums text-muted">
+                {fmt(g.xp)} / {fmt(g.nextLevelAt)} XP
+              </p>
+            </div>
+            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-elevated">
+              <div className="h-full rounded-full bg-accent" style={{ width: `${levelPct}%` }} />
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 text-sm">
+            <Flame className={`h-5 w-5 ${g.streak > 0 ? "text-orange-400" : "text-muted"}`} />
+            <span className="font-semibold tabular-nums text-text">{g.streak}</span>
+            <span className="text-muted">{g.streak === 1 ? "dia" : "dias"} seguidos</span>
+            {g.bestStreak > g.streak ? <span className="text-xs text-muted">(recorde {g.bestStreak})</span> : null}
+          </div>
+          <Link
+            href="/ranking?periodo=all&por=level"
+            className="rounded-lg bg-elevated px-2.5 py-1 text-sm font-semibold tabular-nums text-text hover:bg-accent/15 hover:text-accent"
+          >
+            #{game.rank} <span className="font-normal text-muted">de {game.of}</span>
+          </Link>
+        </section>
+      ) : null}
+
+      <section className="grid grid-cols-3 gap-2 sm:max-w-2xl sm:grid-cols-6">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-xl border border-border bg-surface/60 px-3 py-2.5">
             <p className="text-xl font-semibold tabular-nums text-text">{t.value}</p>
@@ -150,6 +182,21 @@ export default function ProfileView({
           </div>
         ))}
       </section>
+
+      {g && g.badges.length > 0 ? (
+        <section className="flex flex-wrap gap-1.5">
+          {g.badges.map((b) => (
+            <span
+              key={b.id}
+              title={b.hint}
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-400/10 px-2.5 py-1 text-xs font-medium text-amber-300"
+            >
+              <Award className="h-3.5 w-3.5" />
+              {b.label}
+            </span>
+          ))}
+        </section>
+      ) : null}
 
       {favorites.length > 0 ? (
         <section className="flex flex-wrap gap-1.5">
