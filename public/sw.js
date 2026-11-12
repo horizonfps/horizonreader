@@ -65,6 +65,8 @@ const OFFLINE_HTML = `<!doctype html>
   var app = document.getElementById("app");
   var objectUrls = [];
   var onlineHooked = false;
+  var reading = false;
+  var recovering = false;
 
   function el(tag, className, text) {
     var node = document.createElement(tag);
@@ -279,7 +281,20 @@ const OFFLINE_HTML = `<!doctype html>
     render();
   }
 
+  // Served as a fallback for a real page: go back to it once the server answers.
+  async function tryRecover() {
+    if (location.pathname === "/offline" || reading || recovering) return;
+    recovering = true;
+    try {
+      await fetch(location.href, { method: "HEAD", cache: "no-store", credentials: "same-origin" });
+      location.reload();
+    } catch (err) {
+      recovering = false;
+    }
+  }
+
   async function openReader(item) {
+    reading = true;
     releaseObjectUrls();
     app.textContent = "";
     var maxSeen = 0;
@@ -314,6 +329,7 @@ const OFFLINE_HTML = `<!doctype html>
     var back = el("button", null, "‹ voltar");
     back.addEventListener("click", function () {
       releaseObjectUrls();
+      reading = false;
       Promise.resolve(finish()).then(render, render);
     });
     bar.appendChild(back);
@@ -433,6 +449,12 @@ const OFFLINE_HTML = `<!doctype html>
     if (!onlineHooked) {
       onlineHooked = true;
       window.addEventListener("online", flushQueue);
+      window.addEventListener("online", tryRecover);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") tryRecover();
+      });
+      setInterval(tryRecover, 5000);
+      tryRecover();
     }
 
     var cache = await openCache();
@@ -499,6 +521,20 @@ function offlinePage() {
   });
 }
 
+// One retry absorbs a blip in the tunnel before falling back to the shelf.
+async function navigationResponse(request) {
+  try {
+    return await fetch(request);
+  } catch (err) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      return await fetch(request);
+    } catch (retryErr) {
+      return offlinePage();
+    }
+  }
+}
+
 async function offlineIndex() {
   const cache = await caches.open(OFFLINE_CACHE);
   const cached = await cache.match(INDEX_URL);
@@ -545,7 +581,7 @@ self.addEventListener("fetch", (event) => {
       event.respondWith(offlinePage());
       return;
     }
-    event.respondWith(fetch(request).catch(() => offlinePage()));
+    event.respondWith(navigationResponse(request));
     return;
   }
 
