@@ -1,5 +1,5 @@
-// Re-derives MangaDex titles with the current preference and regenerates
-// non-ASCII slugs as ASCII.
+// Swaps Korean/Chinese romanized MangaDex titles for the English one and
+// regenerates non-ASCII slugs as ASCII.
 //
 //   npm run fix-titles [-- --dry-run]
 
@@ -64,20 +64,34 @@ function pickLatinTitle(a: Attrs): string | null {
   return l;
 }
 
-async function fetchAttrsBatch(ids: string[]): Promise<Map<string, Attrs>> {
-  const out = new Map<string, Attrs>();
+async function fetchAttrsBatch(ids: string[]): Promise<Map<string, Attrs> | null> {
   const qs = new URLSearchParams({ limit: String(ids.length) });
   for (const id of ids) qs.append("ids[]", id);
   for (const r of ["safe", "suggestive", "erotica", "pornographic"]) qs.append("contentRating[]", r);
-  try {
-    const res = await fetch(`https://api.mangadex.org/manga?${qs}`, { headers: HEADERS });
-    if (!res.ok) return out;
-    const d = (await res.json()) as { data?: { id: string; attributes?: Attrs }[] };
-    for (const m of d.data ?? []) if (m.attributes) out.set(m.id, m.attributes);
-  } catch {
-    // batch skipped; rerun picks it up
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await fetch(`https://api.mangadex.org/manga?${qs}`, { headers: HEADERS });
+      if (res.ok) {
+        const d = (await res.json()) as { data?: { id: string; attributes?: Attrs }[] };
+        const out = new Map<string, Attrs>();
+        for (const m of d.data ?? []) if (m.attributes) out.set(m.id, m.attributes);
+        return out;
+      }
+      console.warn(`batch HTTP ${res.status}, retrying`);
+    } catch (e) {
+      console.warn(`batch failed (${(e as Error).message}), retrying`);
+    }
+    await sleep(2000 * (attempt + 1));
   }
-  return out;
+  return null;
+}
+
+// Only Korean or Chinese romanizations get replaced; any other stored title stays.
+function isNonJapaneseRomanization(title: string, a: Attrs): boolean {
+  for (const o of [a.title, ...(a.altTitles ?? [])])
+    for (const [k, v] of Object.entries(o ?? {}))
+      if (k.endsWith("-ro") && !k.startsWith("ja") && v === title) return true;
+  return false;
 }
 
 async function uniqueSlug(base: string, workId: number): Promise<string> {
@@ -104,9 +118,14 @@ async function main() {
   for (let i = 0; i < mdx.length; i += 100) {
     const batch = mdx.slice(i, i + 100);
     const attrs = await fetchAttrsBatch(batch.map((w) => w.externalId));
+    if (!attrs) {
+      console.error(`batch at ${i} skipped after retries`);
+      continue;
+    }
     for (const w of batch) {
       const a = attrs.get(w.externalId);
-      const t = a ? pickLatinTitle(a) : null;
+      if (!a || !isNonJapaneseRomanization(w.title, a)) continue;
+      const t = pickLatinTitle(a);
       if (t && t !== w.title) fresh.set(w.id, t);
     }
     await sleep(300);
