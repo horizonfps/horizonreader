@@ -14,10 +14,12 @@ export default function WindowTabs({
   title,
   tabs,
   href,
+  ranked,
 }: {
   title: string;
   tabs: Tab[];
   href?: string;
+  ranked?: boolean;
 }) {
   const visible = tabs.filter((t) => t.items.length > 0);
   const [active, setActive] = useState(0);
@@ -52,7 +54,7 @@ export default function WindowTabs({
           })}
         </div>
       </SectionHeader>
-      <CardRow items={rowItems} />
+      <CardRow items={rowItems} ranked={ranked} />
     </section>
   );
 }

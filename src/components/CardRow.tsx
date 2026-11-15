@@ -17,10 +17,12 @@ export default function CardRow({
   items,
   showTitle = true,
   prefetch,
+  ranked,
 }: {
   items: RowItem[];
   showTitle?: boolean;
   prefetch?: boolean;
+  ranked?: boolean;
 }) {
   if (!items.length) return null;
   return (
@@ -46,6 +48,15 @@ export default function CardRow({
                   draggable={false}
                   className="cover-img h-full w-full object-cover"
                 />
+              ) : null}
+              {ranked ? (
+                <span
+                  className={`absolute left-0 top-0 min-w-6 rounded-br-lg px-1.5 py-0.5 text-center text-sm font-bold ${
+                    i < 3 ? "bg-accent text-on-accent" : "bg-black/70 text-text backdrop-blur"
+                  }`}
+                >
+                  {i + 1}
+                </span>
               ) : null}
               <RatingBadge rating={it.rating} />
               {it.type ? (

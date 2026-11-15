@@ -10,7 +10,8 @@ const CAP = 30;
 const TTL = 60 * 60 * 1000;
 
 export type HomeSections = {
-  popular: { "30d": SectionItem[]; "6m": SectionItem[]; "12m": SectionItem[]; all: SectionItem[] };
+  trending: { "7d": SectionItem[]; "30d": SectionItem[]; "90d": SectionItem[] };
+  popular: { "6m": SectionItem[]; "12m": SectionItem[]; all: SectionItem[] };
   completed: { "7d": SectionItem[]; "30d": SectionItem[]; "12m": SectionItem[] };
   bestNew: SectionItem[];
 };
@@ -81,17 +82,21 @@ function workToItem(w: BackboneWork): SectionItem {
 
 function emptySections(): HomeSections {
   return {
-    popular: { "30d": [], "6m": [], "12m": [], all: [] },
+    trending: { "7d": [], "30d": [], "90d": [] },
+    popular: { "6m": [], "12m": [], all: [] },
     completed: { "7d": [], "30d": [], "12m": [] },
     bestNew: [],
   };
 }
 
 function hasAny(s: HomeSections): boolean {
+  const t = s.trending;
   const p = s.popular;
   const c = s.completed;
   return (
-    p["30d"].length > 0 ||
+    t["7d"].length > 0 ||
+    t["30d"].length > 0 ||
+    t["90d"].length > 0 ||
     p["6m"].length > 0 ||
     p["12m"].length > 0 ||
     p.all.length > 0 ||
@@ -118,8 +123,12 @@ export async function getHomeSections(): Promise<HomeSections> {
       safe(getComickTrending({ day: 365 }), [] as SectionItem[]),
     ]);
 
-    const popular = {
+    const trending = {
+      "7d": dedupCap(sections.trending?.["7"] ?? []),
       "30d": dedupCap(sections.trending?.["30"] ?? []),
+      "90d": dedupCap(sections.trending?.["90"] ?? []),
+    };
+    const popular = {
       "6m": dedupCap(trend6m),
       "12m": dedupCap(trend12m),
       all: dedupCap(sections.popularAllTime ?? []),
@@ -162,7 +171,7 @@ export async function getHomeSections(): Promise<HomeSections> {
       bestNew = dedupCap(mdxNew.map(workToItem));
     }
 
-    const data: HomeSections = { popular, completed, bestNew };
+    const data: HomeSections = { trending, popular, completed, bestNew };
     if (hasAny(data)) {
       sectionsCache = { data, at: now };
       return data;

@@ -142,13 +142,15 @@ export default async function HomePage() {
     getLatestUpdates().catch(() => []),
   ]);
 
+  const trending = sections?.trending;
   const popular = sections?.popular;
   const completed = sections?.completed;
   const bestNew = sections?.bestNew ?? [];
 
   await attachLocalSlugs([
     horizonPicks,
-    ...(popular ? [popular["30d"], popular["6m"], popular["12m"], popular.all] : []),
+    ...(trending ? [trending["7d"], trending["30d"], trending["90d"]] : []),
+    ...(popular ? [popular["6m"], popular["12m"], popular.all] : []),
     ...(completed ? [completed["7d"], completed["30d"], completed["12m"]] : []),
     bestNew,
   ]);
@@ -157,12 +159,13 @@ export default async function HomePage() {
   // what does not need indexing.
   indexComickItems([
     ...horizonPicks,
-    ...(popular ? [...popular["30d"], ...popular["6m"], ...popular["12m"], ...popular.all] : []),
+    ...(trending ? [...trending["7d"], ...trending["30d"], ...trending["90d"]] : []),
+    ...(popular ? [...popular["6m"], ...popular["12m"], ...popular.all] : []),
     ...(completed ? [...completed["7d"], ...completed["30d"], ...completed["12m"]] : []),
     ...bestNew,
   ]);
 
-  const hero = await getHeroItems(horizonPicks, popular?.["30d"] ?? []);
+  const hero = await getHeroItems(horizonPicks, trending?.["30d"] ?? []);
   const now = Date.now();
 
   return (
@@ -220,12 +223,23 @@ export default async function HomePage() {
 
       <SectionRow title="Horizon Recomenda" items={horizonPicks} />
 
+      {trending ? (
+        <WindowTabs
+          title="Em alta"
+          ranked
+          tabs={[
+            { key: "7d", label: "7 dias", items: trending["7d"] },
+            { key: "30d", label: "30 dias", items: trending["30d"] },
+            { key: "90d", label: "3 meses", items: trending["90d"] },
+          ]}
+        />
+      ) : null}
+
       {popular ? (
         <WindowTabs
           title="Populares"
           href="/browse?sort=popular"
           tabs={[
-            { key: "30d", label: "30 dias", items: popular["30d"] },
             { key: "6m", label: "6 meses", items: popular["6m"] },
             { key: "12m", label: "12 meses", items: popular["12m"] },
             { key: "all", label: "Sempre", items: popular.all },
