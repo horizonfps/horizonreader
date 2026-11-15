@@ -21,7 +21,9 @@ body {
   background: rgb(var(--bg));
   color: rgb(var(--text));
   -webkit-tap-highlight-color: transparent;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
+  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 * {
