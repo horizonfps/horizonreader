@@ -7,17 +7,10 @@ import { cachedJson } from "./httpCache";
 
 const BASE = "https://api.mangadex.org";
 const COVERS = "https://uploads.mangadex.org/covers";
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) horizonreader";
-
-// MangaDex rejects requests without a browser-like header set (400 "Unsupported
-// Browser"), so send these alongside the required User-Agent.
+// MangaDex bot-challenges browser-like ("Mozilla/…") User-Agents with a 403.
 const HEADERS: Record<string, string> = {
-  "User-Agent": UA,
+  "User-Agent": "horizonreader/1.0",
   Accept: "application/json",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-site",
 };
 
 // Discovery surfaces stay safe/suggestive; search also accepts erotica so
