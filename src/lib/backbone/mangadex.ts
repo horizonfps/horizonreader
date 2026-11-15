@@ -162,9 +162,10 @@ function coverUrl(m: MdxManga): string | null {
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 
 // Some entries mislabel a CJK value as "-ro", so the value is checked too.
-function firstRomanized(o?: Record<string, string>): string | null {
+function firstRomanized(o?: Record<string, string>, langPrefix = ""): string | null {
   if (!o) return null;
-  for (const [k, v] of Object.entries(o)) if (k.endsWith("-ro") && v && !CJK.test(v)) return v;
+  for (const [k, v] of Object.entries(o))
+    if (k.startsWith(langPrefix) && k.endsWith("-ro") && v && !CJK.test(v)) return v;
   return null;
 }
 
@@ -174,15 +175,15 @@ function firstLatin(o?: Record<string, string>): string | null {
   return null;
 }
 
-// Display/search title preference: canonical English, then the canonical
-// romanized title (the name readers actually know), then English alts, then any
-// Latin-script title, so CJK canonicals never surface in the UI.
+// Manga are known by romaji, manhwa and manhua by their English name; CJK never surfaces.
 function englishTitle(a: MdxManga["attributes"]): string | null {
   if (!a) return null;
   if (a.title?.en) return a.title.en;
+  const romaji = firstRomanized(a.title, "ja");
+  if (romaji) return romaji;
+  for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
   const canonicalRo = firstRomanized(a.title);
   if (canonicalRo) return canonicalRo;
-  for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
   let ro: string | null = null;
   for (const alt of a.altTitles ?? []) {
     ro = firstRomanized(alt);
