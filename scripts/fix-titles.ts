@@ -1,7 +1,7 @@
-// One-off migration: works stored with a CJK title get an English or romanized
-// title refetched from MangaDex; non-ASCII slugs are regenerated as ASCII.
+// Re-derives MangaDex titles with the current preference and regenerates
+// non-ASCII slugs as ASCII.
 //
-//   npm run fix-titles
+//   npm run fix-titles [-- --dry-run]
 
 import { PrismaClient } from "@prisma/client";
 import { norm, matchKeys, slugify } from "../src/lib/backbone/normalize.ts";
@@ -45,16 +45,19 @@ type Attrs = { title?: Record<string, string>; altTitles?: Record<string, string
 
 // Mirrors englishTitle in src/lib/backbone/mangadex.ts.
 function pickLatinTitle(a: Attrs): string | null {
-  if (a.title?.en) return a.title.en;
-  for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
-  const romanized = (o?: Record<string, string>) => {
-    for (const [k, v] of Object.entries(o ?? {})) if (k.endsWith("-ro") && v && !CJK.test(v)) return v;
+  const romanized = (o?: Record<string, string>, prefix = "") => {
+    for (const [k, v] of Object.entries(o ?? {}))
+      if (k.startsWith(prefix) && k.endsWith("-ro") && v && !CJK.test(v)) return v;
     return null;
   };
   const latin = (o?: Record<string, string>) => {
     for (const v of Object.values(o ?? {})) if (v && !CJK.test(v)) return v;
     return null;
   };
+  if (a.title?.en) return a.title.en;
+  const romaji = romanized(a.title, "ja");
+  if (romaji) return romaji;
+  for (const alt of a.altTitles ?? []) if (alt?.en) return alt.en;
   let ro = romanized(a.title);
   for (const alt of a.altTitles ?? []) {
     if (ro) break;
@@ -69,17 +72,20 @@ function pickLatinTitle(a: Attrs): string | null {
   return l;
 }
 
-async function fetchAttrs(id: string): Promise<Attrs | null> {
+async function fetchAttrsBatch(ids: string[]): Promise<Map<string, Attrs>> {
+  const out = new Map<string, Attrs>();
+  const qs = new URLSearchParams({ limit: String(ids.length) });
+  for (const id of ids) qs.append("ids[]", id);
+  for (const r of ["safe", "suggestive", "erotica", "pornographic"]) qs.append("contentRating[]", r);
   try {
-    const res = await fetch(`https://api.mangadex.org/manga/${encodeURIComponent(id)}`, {
-      headers: HEADERS,
-    });
-    if (!res.ok) return null;
-    const d = (await res.json()) as { data?: { attributes?: Attrs } };
-    return d?.data?.attributes ?? null;
+    const res = await fetch(`https://api.mangadex.org/manga?${qs}`, { headers: HEADERS });
+    if (!res.ok) return out;
+    const d = (await res.json()) as { data?: { id: string; attributes?: Attrs }[] };
+    for (const m of d.data ?? []) if (m.attributes) out.set(m.id, m.attributes);
   } catch {
-    return null;
+    // batch skipped; rerun picks it up
   }
+  return out;
 }
 
 async function uniqueSlug(base: string, workId: number): Promise<string> {
@@ -96,33 +102,39 @@ async function uniqueSlug(base: string, workId: number): Promise<string> {
 }
 
 async function main() {
+  const dryRun = process.argv.includes("--dry-run");
   const works = await prisma.work.findMany({
     select: { id: true, origin: true, externalId: true, title: true, slug: true, altTitles: true },
   });
-  const broken = works.filter((w) => CJK.test(w.title) || BAD_SLUG.test(w.slug));
+
+  const fresh = new Map<number, string>();
+  const mdx = works.filter((w) => w.origin === "mangadex");
+  for (let i = 0; i < mdx.length; i += 100) {
+    const batch = mdx.slice(i, i + 100);
+    const attrs = await fetchAttrsBatch(batch.map((w) => w.externalId));
+    for (const w of batch) {
+      const a = attrs.get(w.externalId);
+      const t = a ? pickLatinTitle(a) : null;
+      if (t && t !== w.title) fresh.set(w.id, t);
+    }
+    await sleep(300);
+  }
+
+  const broken = works.filter((w) => fresh.has(w.id) || BAD_SLUG.test(w.slug));
   console.log(`${broken.length} of ${works.length} works need fixing`);
 
   let fixed = 0;
   for (const w of broken) {
-    let title = w.title;
-    if (CJK.test(title) && w.origin === "mangadex") {
-      const attrs = await fetchAttrs(w.externalId);
-      await sleep(300);
-      const better = attrs ? pickLatinTitle(attrs) : null;
-      if (better) title = better;
-    }
-
+    const title = fresh.get(w.id) ?? w.title;
     let slug = w.slug;
     const placeholder = title !== w.title && slug.startsWith("work-");
     if (BAD_SLUG.test(slug) || placeholder) {
       slug = await uniqueSlug(slugify(title, shortHash(w.externalId)), w.id);
     }
+    if (title === w.title && slug === w.slug) continue;
 
-    if (title === w.title && slug === w.slug) {
-      console.log(`#${w.id} unchanged (no latin title found): ${w.title}`);
-      continue;
-    }
-
+    console.log(`#${w.id} "${w.title}" -> "${title}" (${slug})`);
+    if (dryRun) continue;
     const titles = [...new Set([title, w.title, ...parseArr(w.altTitles)])].filter(Boolean);
     await prisma.work.update({
       where: { id: w.id },
@@ -135,7 +147,6 @@ async function main() {
       },
     });
     fixed++;
-    console.log(`#${w.id} "${w.title}" -> "${title}" (${slug})`);
   }
   console.log(`Done. ${fixed} fixed.`);
 }
