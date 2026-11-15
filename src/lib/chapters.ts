@@ -69,3 +69,17 @@ export function groupByScanlator<T extends RawChapter>(chapters: T[]): ScanGroup
   groups.sort((a, b) => b.count - a.count || b.latestMs - a.latestMs);
   return groups;
 }
+
+// Highest value another source corroborates, so one source with duplicated or
+// misnumbered chapters cannot inflate a work's total.
+function agreedMax(values: number[]): number {
+  const v = values.filter((x) => x > 0).sort((a, b) => b - a);
+  for (let i = 0; i < v.length - 1; i++) {
+    if (v[i] - v[i + 1] <= Math.max(2, v[i] * 0.05)) return v[i];
+  }
+  return v[v.length - 1] ?? 0;
+}
+
+export function workChapterTotal(links: { chapterCount: number; latestNumber: number }[]): number {
+  return agreedMax(links.map((l) => l.latestNumber)) || agreedMax(links.map((l) => l.chapterCount));
+}

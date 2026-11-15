@@ -1,6 +1,7 @@
 import { getSession } from "@/lib/session";
 import { prisma } from "@/lib/db";
 import { STATUS_ORDER, type FavStatus } from "@/lib/cards";
+import { workChapterTotal } from "@/lib/chapters";
 import LibraryView, { type LibraryItem } from "@/components/LibraryView";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +67,7 @@ export default async function LibraryPage({
         lastChapter: l && l.chapter > 0 ? l.chapter : null,
         lastReadAt: l?.at ?? null,
         chapterCount: Math.max(0, ...f.work.links.map((x) => x.chapterCount)),
-        latestNumber: Math.max(0, ...f.work.links.map((x) => x.latestNumber)),
+        latestNumber: workChapterTotal(f.work.links),
       };
     });
 

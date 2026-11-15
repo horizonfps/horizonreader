@@ -12,6 +12,7 @@ import { getRelatedWorks } from "@/lib/related";
 import { coverProxy } from "@/lib/cards";
 import { typeLabel, statusLabel, formatCount } from "@/lib/labels";
 import { stripMarkdown } from "@/lib/text";
+import { workChapterTotal } from "@/lib/chapters";
 import FavoriteButton from "@/components/FavoriteButton";
 import RefreshSourcesButton from "@/components/RefreshSourcesButton";
 import HorizonPickButton from "@/components/HorizonPickButton";
@@ -98,7 +99,7 @@ export default async function WorkPage({
   const work = await prisma.work.findUnique({ where: { slug } });
   if (!work) notFound();
 
-  const [favRow, pickRow, linkAgg] = await Promise.all([
+  const [favRow, pickRow, linkStats] = await Promise.all([
     session
       ? prisma.favorite
           .findUnique({ where: { userId_workId: { userId: session.uid, workId: work.id } } })
@@ -110,8 +111,8 @@ export default async function WorkPage({
           .catch(() => null)
       : null,
     prisma.sourceLink
-      .aggregate({ where: { workId: work.id }, _max: { chapterCount: true }, _count: { id: true } })
-      .catch(() => null),
+      .findMany({ where: { workId: work.id }, select: { chapterCount: true, latestNumber: true } })
+      .catch(() => []),
   ]);
 
   const favStatus = favRow?.status ?? null;
@@ -125,8 +126,8 @@ export default async function WorkPage({
   const people = [work.author, work.artist && work.artist !== work.author ? work.artist : null]
     .filter(Boolean)
     .join(" · ");
-  const maxChapters = linkAgg?._max.chapterCount ?? 0;
-  const sourceCount = linkAgg?._count.id ?? 0;
+  const maxChapters = Math.floor(workChapterTotal(linkStats));
+  const sourceCount = linkStats.length;
 
   const details: [string, string][] = [];
   if (work.author) details.push(["Autor", work.author]);
