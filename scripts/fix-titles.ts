@@ -10,15 +10,7 @@ const prisma = new PrismaClient();
 
 const CJK = /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿＀-￯]/;
 const BAD_SLUG = /[^a-z0-9-]/;
-// MangaDex rejects requests missing this browser-like header set.
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) horizonreader",
-  Accept: "application/json",
-  "Accept-Language": "en-US,en;q=0.9",
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-site",
-};
+const HEADERS = { "User-Agent": "horizonreader/1.0", Accept: "application/json" };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
