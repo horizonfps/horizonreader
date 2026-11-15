@@ -151,7 +151,7 @@ export default async function WorkPage({
         </div>
       </div>
 
-      <header className="relative z-10 pt-4 sm:pt-8 lg:pt-12">
+      <header className="relative z-20 pt-4 sm:pt-8 lg:pt-12">
         <div className="flex gap-4 sm:gap-6 lg:gap-8">
           <div className="w-28 shrink-0 sm:w-44 lg:w-56">
             <div className="relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-surface shadow-2xl shadow-black/60 ring-1 ring-white/10">
